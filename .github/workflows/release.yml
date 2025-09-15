@@ -25,13 +25,13 @@ jobs:
         run: go mod tidy
 
       - name: Build for Linux
-        run: GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o leveldb-parser-go-linux-amd64 ./...
+        run: GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o leveldb-parser-go-linux-amd64
 
       - name: Build for Windows
-        run: GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o leveldb-parser-go-windows-amd64.exe ./...
+        run: GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o leveldb-parser-go-windows-amd64.exe
 
       - name: Build for macOS (ARM)
-        run: GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o leveldb-parser-go-darwin-arm64 ./...
+        run: GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o leveldb-parser-go-darwin-arm64
 
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
