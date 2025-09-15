@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"sort"
 
 	"leveldb-parser-go/leveldb/common"
 	"leveldb-parser-go/leveldb/db"
@@ -14,86 +16,128 @@ import (
 )
 
 var (
-	app = kingpin.New("leveldb-parser-go", "A tool for digital forensic analysis of LevelDB files.")
+	app = kingpin.New("leveldb-parser-go", "A Go tool for forensic analysis of LevelDB files.")
 
-	// DB command: process an entire directory.
-	dbCmd          = app.Command("db", "Parse a directory as leveldb.")
-	dbSource       = dbCmd.Arg("source", "The source leveldb directory.").Required().String()
-	dbOutputFormat = dbCmd.Flag("output", "Output format.").Default("json").Enum("json", "jsonl")
+	// DB command
+	dbCmd        = app.Command("db", "Parse a LevelDB directory.")
+	dbPath       = dbCmd.Arg("path", "Path to the LevelDB directory.").Required().String()
+	dbFormat     = dbCmd.Flag("format", "Output format ('json' or 'jsonl').").Default("json").Enum("json", "jsonl")
+	dbOutputFile = dbCmd.Flag("output-file", "Save output to a file.").Short('o').String()
 
-	// LOG command: process a single .log file.
-	logCmd          = app.Command("log", "Parse a leveldb log file.")
-	logSource       = logCmd.Arg("source", "The source log file.").Required().String()
-	logOutputFormat = logCmd.Flag("output", "Output format.").Default("json").Enum("json", "jsonl")
+	// LDB command
+	ldbCmd        = app.Command("ldb", "Parse a single .ldb table file.")
+	ldbPath       = ldbCmd.Arg("path", "Path to the .ldb file.").Required().String()
+	ldbFormat     = ldbCmd.Flag("format", "Output format ('json' or 'jsonl').").Default("json").Enum("json", "jsonl")
+	ldbOutputFile = ldbCmd.Flag("output-file", "Save output to a file.").Short('o').String()
 
-	// LDB command: process a single .ldb or .sst file.
-	ldbCmd          = app.Command("ldb", "Parse a leveldb table (.ldb or .sst) file.")
-	ldbSource       = ldbCmd.Arg("source", "The source ldb file.").Required().String()
-	ldbOutputFormat = ldbCmd.Flag("output", "Output format.").Default("json").Enum("json", "jsonl")
+	// LOG command
+	logCmd        = app.Command("log", "Parse a single .log file.")
+	logPath       = logCmd.Arg("path", "Path to the .log file.").Required().String()
+	logFormat     = logCmd.Flag("format", "Output format ('json' or 'jsonl').").Default("json").Enum("json", "jsonl")
+	logOutputFile = logCmd.Flag("output-file", "Save output to a file.").Short('o').String()
 )
 
 func main() {
-	app.HelpFlag.Short('h')
-	// Parse the command-line arguments and run the appropriate command.
-	command := kingpin.MustParse(app.Parse(os.Args[1:]))
-
-	switch command {
+	// Determine which command was parsed
+	switch kingpin.MustParse(app.Parse(os.Args[1:])) {
 	case dbCmd.FullCommand():
-		runDbCommand(*dbSource, *dbOutputFormat)
-	case logCmd.FullCommand():
-		runLogCommand(*logSource, *logOutputFormat)
+		runDbCommand(*dbPath, *dbFormat, *dbOutputFile)
 	case ldbCmd.FullCommand():
-		runLdbCommand(*ldbSource, *ldbOutputFormat)
+		runLdbCommand(*ldbPath, *ldbFormat, *ldbOutputFile)
+	case logCmd.FullCommand():
+		runLogCommand(*logPath, *logFormat, *logOutputFile)
 	}
 }
 
-// Handles the logic for the 'db' command.
-func runDbCommand(source, outputFormat string) {
-	fmt.Fprintf(os.Stderr, "🔎 Parsing LevelDB directory: %s\n", source)
-	reader, err := db.NewFolderReader(source)
+// getOutputWriter determines if the output should go to stdout or a file.
+func getOutputWriter(outputFile string) (io.WriteCloser, error) {
+	if outputFile != "" {
+		return os.Create(outputFile)
+	}
+	return os.Stdout, nil
+}
+
+func runDbCommand(path, format, outputFile string) {
+	fmt.Fprintf(os.Stderr, "🔎 Parsing LevelDB directory: %s\n", path)
+	reader, err := db.NewFolderReader(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error creating folder reader: %v\n", err)
 		os.Exit(1)
 	}
 
 	records, err := reader.GetRecords()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting records from folder: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Fprintf(os.Stderr, "✅ Found %d total records.\n\n", len(records))
-
-	// Convert each record to its JSON-friendly representation before printing.
-	for _, rec := range records {
-		jsonRec := db.JSONLevelDBRecord{
-			Path:      rec.Path,
-			Recovered: rec.Recovered,
-			Record:    common.ToJSONRecord(rec.Record),
+	// Sort records for consistent output by accessing the nested Record field.
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].Record.GetSequenceNumber() != records[j].Record.GetSequenceNumber() {
+			return records[i].Record.GetSequenceNumber() < records[j].Record.GetSequenceNumber()
 		}
-		printOutput(jsonRec, outputFormat)
-	}
-}
+		return records[i].Record.GetOffset() < records[j].Record.GetOffset()
+	})
 
-// Handles the logic for the 'log' command.
-func runLogCommand(source, outputFormat string) {
-	fmt.Fprintf(os.Stderr, "🔎 Parsing LOG file: %s\n", source)
-	reader := log.NewFileReader(source)
-	records, err := reader.GetParsedInternalKeys()
+	writer, err := getOutputWriter(outputFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing LOG records: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "✅ Found %d internal key records.\n\n", len(records))
-	for i := range records {
-		printOutput(common.ToJSONRecord(&records[i]), outputFormat)
+	defer writer.Close()
+
+	// Handle JSON and JSONL output specifically for []*db.LevelDBRecord
+	var outputRecords []map[string]interface{}
+	for _, rec := range records {
+		// Convert the inner common.Record to a JSON-friendly struct
+		jsonInnerRec := common.ToJSONRecord(rec.Record)
+
+		// Marshal/Unmarshal to get a mutable map
+		jsonRecBytes, err := json.Marshal(jsonInnerRec)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error marshalling record: %v\n", err)
+			continue
+		}
+		var m map[string]interface{}
+		if err := json.Unmarshal(jsonRecBytes, &m); err != nil {
+			fmt.Fprintf(os.Stderr, "Error unmarshalling record to map: %v\n", err)
+			continue
+		}
+
+		// Create a new map with the final nested structure
+		finalRecord := map[string]interface{}{
+			"path":      rec.Path,
+			"record":    m,
+			"recovered": rec.Recovered,
+		}
+		outputRecords = append(outputRecords, finalRecord)
+	}
+
+	if format == "jsonl" {
+		for _, finalRec := range outputRecords {
+			line, err := json.Marshal(finalRec)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error marshalling final record to JSONL: %v\n", err)
+				continue
+			}
+			fmt.Fprintln(writer, string(line))
+		}
+	} else {
+		encoder := json.NewEncoder(writer)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(outputRecords); err != nil {
+			fmt.Fprintf(os.Stderr, "Error encoding JSON: %v\n", err)
+		}
+	}
+
+	if outputFile != "" {
+		fmt.Fprintf(os.Stderr, "✅ Output successfully saved to %s\n", outputFile)
 	}
 }
 
-// Handles the logic for the 'ldb' command.
-func runLdbCommand(source, outputFormat string) {
-	fmt.Fprintf(os.Stderr, "🔎 Parsing LDB file: %s\n", source)
-	reader, err := ldb.NewFileReader(source)
+func runLdbCommand(path, format, outputFile string) {
+	fmt.Fprintf(os.Stderr, "🔎 Parsing LDB file: %s\n", path)
+	reader, err := ldb.NewFileReader(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -103,33 +147,115 @@ func runLdbCommand(source, outputFormat string) {
 		fmt.Fprintf(os.Stderr, "Error parsing LDB records: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "✅ Found %d key-value records.\n\n", len(records))
+
+	// Convert to common.Record interface for generic processing
+	var genericRecords []common.Record
 	for i := range records {
-		printOutput(common.ToJSONRecord(&records[i]), outputFormat)
+		genericRecords = append(genericRecords, &records[i])
+	}
+
+	writer, err := getOutputWriter(outputFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)
+		os.Exit(1)
+	}
+	defer writer.Close()
+
+	if format == "jsonl" {
+		for _, rec := range genericRecords {
+			printRecordJSONL(rec, path, writer)
+		}
+	} else {
+		printRecordsJSON(genericRecords, path, writer)
+	}
+
+	if outputFile != "" {
+		fmt.Fprintf(os.Stderr, "✅ Output successfully saved to %s\n", outputFile)
 	}
 }
 
-// printOutput marshals the given data to the specified JSON format and prints it.
-func printOutput(data interface{}, format string) {
-	var output []byte
-	var err error
-
-	switch format {
-	case "json":
-		// Indented JSON for human readability.
-		output, err = json.MarshalIndent(data, "", "  ")
-	case "jsonl":
-		// JSONL (JSON Lines) for machine processing.
-		output, err = json.Marshal(data)
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown output format: %s\n", format)
-		return
-	}
-
+func runLogCommand(path, format, outputFile string) {
+	fmt.Fprintf(os.Stderr, "🔎 Parsing LOG file: %s\n", path)
+	reader := log.NewFileReader(path)
+	records, err := reader.GetParsedInternalKeys()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error marshaling to JSON: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error parsing LOG records: %v\n", err)
+		os.Exit(1)
+	}
+
+	var genericRecords []common.Record
+	for i := range records {
+		genericRecords = append(genericRecords, &records[i])
+	}
+
+	writer, err := getOutputWriter(outputFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)
+		os.Exit(1)
+	}
+	defer writer.Close()
+
+	if format == "jsonl" {
+		for _, rec := range genericRecords {
+			printRecordJSONL(rec, path, writer)
+		}
+	} else {
+		printRecordsJSON(genericRecords, path, writer)
+	}
+
+	if outputFile != "" {
+		fmt.Fprintf(os.Stderr, "✅ Output successfully saved to %s\n", outputFile)
+	}
+}
+
+// printRecordsJSON prints a slice of records as a single, pretty-printed JSON array.
+func printRecordsJSON(records []common.Record, pathForFiles string, writer io.Writer) {
+	var outputRecords []map[string]interface{}
+	for _, rec := range records {
+		jsonRecBytes, err := json.Marshal(common.ToJSONRecord(rec))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error marshalling record: %v\n", err)
+			continue
+		}
+		var m map[string]interface{}
+		if err := json.Unmarshal(jsonRecBytes, &m); err != nil {
+			fmt.Fprintf(os.Stderr, "Error unmarshalling record to map: %v\n", err)
+			continue
+		}
+		if pathForFiles != "" {
+			m["path"] = pathForFiles
+		}
+		outputRecords = append(outputRecords, m)
+	}
+
+	encoder := json.NewEncoder(writer)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(outputRecords); err != nil {
+		fmt.Fprintf(os.Stderr, "Error encoding JSON: %v\n", err)
+	}
+}
+
+// printRecordJSONL prints a single record as a one-line JSON object.
+func printRecordJSONL(rec common.Record, pathForFile string, writer io.Writer) {
+	jsonRecBytes, err := json.Marshal(common.ToJSONRecord(rec))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error marshalling record: %v\n", err)
 		return
 	}
-	// Print the final JSON to standard output.
-	fmt.Println(string(output))
+	var m map[string]interface{}
+	if err := json.Unmarshal(jsonRecBytes, &m); err != nil {
+		fmt.Fprintf(os.Stderr, "Error unmarshalling record to map: %v\n", err)
+		return
+	}
+
+	if pathForFile != "" {
+		m["path"] = pathForFile
+	}
+
+	line, err := json.Marshal(m)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error marshalling final record to JSONL: %v\n", err)
+		return
+	}
+	fmt.Fprintln(writer, string(line))
 }

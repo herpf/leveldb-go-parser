@@ -11,7 +11,7 @@ Important: this go version was mainly generated with generative AI.
 In any case, please let me know if you have any comments, or suggestions. 
 
 # Usage
-./leveldb-parser-go db /path/to/leveldb -o output.json
+./leveldb-parser-go db --format jsonl /path/to/leveldb --output-file testoutput.jsonl
 
 # Acknowledgements
 This tool would not be possible without the foundational work done by the developers of dfindexeddb. Their Python implementation was used as the primary reference for all file parsing logic.
