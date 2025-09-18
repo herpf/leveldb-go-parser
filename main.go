@@ -92,7 +92,6 @@ func runDbCommand(path, format, outputFile string) {
 		var recordAsMap map[string]interface{}
 
 		// Use a type switch to manually build the map for each concrete type.
-		// This makes the logic independent of whether a ToMap() method exists on the types.
 		switch v := rec.Record.(type) {
 		case *common.KeyValueRecord:
 			recordAsMap = map[string]interface{}{
@@ -263,7 +262,6 @@ func printRecordsJSON(records []common.Record, pathForFiles string, writer io.Wr
 func printRecordJSONL(rec common.Record, pathForFile string, writer io.Writer) {
 	var m map[string]interface{}
 
-	// Use a type switch to manually build the map for each concrete type.
 	switch v := rec.(type) {
 	case *common.KeyValueRecord:
 		m = map[string]interface{}{
