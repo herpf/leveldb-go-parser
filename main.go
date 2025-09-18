@@ -86,43 +86,54 @@ func runDbCommand(path, format, outputFile string) {
 	}
 	defer writer.Close()
 
-	// Handle JSON and JSONL output specifically for []*db.LevelDBRecord
-	var outputRecords []map[string]interface{}
+	// Convert the slice of LevelDBRecord structs to a slice of maps for consistent marshalling.
+	outputRecords := make([]map[string]interface{}, 0, len(records))
 	for _, rec := range records {
-		// Convert the inner common.Record to a JSON-friendly struct
-		jsonInnerRec := common.ToJSONRecord(rec.Record)
+		var recordAsMap map[string]interface{}
 
-		// Marshal/Unmarshal to get a mutable map
-		jsonRecBytes, err := json.Marshal(jsonInnerRec)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error marshalling record: %v\n", err)
+		// Use a type switch to manually build the map for each concrete type.
+		// This makes the logic independent of whether a ToMap() method exists on the types.
+		switch v := rec.Record.(type) {
+		case *common.KeyValueRecord:
+			recordAsMap = map[string]interface{}{
+				"offset":          v.GetOffset(),
+				"key":             common.BytesToEscapedString(v.Key),
+				"value":           common.BytesToEscapedString(v.Value),
+				"sequence_number": v.GetSequenceNumber(),
+				"record_type":     v.RecordType,
+			}
+		case *common.ParsedInternalKey:
+			recordAsMap = map[string]interface{}{
+				"offset":          v.GetOffset(),
+				"key":             common.BytesToEscapedString(v.Key),
+				"value":           common.BytesToEscapedString(v.Value),
+				"sequence_number": v.GetSequenceNumber(),
+				"record_type":     v.RecordType,
+			}
+		default:
+			fmt.Fprintf(os.Stderr, "Warning: unknown record type %T\n", v)
 			continue
 		}
-		var m map[string]interface{}
-		if err := json.Unmarshal(jsonRecBytes, &m); err != nil {
-			fmt.Fprintf(os.Stderr, "Error unmarshalling record to map: %v\n", err)
-			continue
-		}
 
-		// Create a new map with the final nested structure
-		finalRecord := map[string]interface{}{
+		recordMap := map[string]interface{}{
 			"path":      rec.Path,
-			"record":    m,
+			"record":    recordAsMap,
 			"recovered": rec.Recovered,
 		}
-		outputRecords = append(outputRecords, finalRecord)
+		outputRecords = append(outputRecords, recordMap)
 	}
 
 	if format == "jsonl" {
-		for _, finalRec := range outputRecords {
-			line, err := json.Marshal(finalRec)
+		for _, rec := range outputRecords {
+			line, err := json.Marshal(rec)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error marshalling final record to JSONL: %v\n", err)
+				fmt.Fprintf(os.Stderr, "Error marshalling record to JSONL: %v\n", err)
 				continue
 			}
 			fmt.Fprintln(writer, string(line))
 		}
 	} else {
+		// For 'json' format, encode the entire slice as a pretty-printed array.
 		encoder := json.NewEncoder(writer)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(outputRecords); err != nil {
@@ -148,7 +159,6 @@ func runLdbCommand(path, format, outputFile string) {
 		os.Exit(1)
 	}
 
-	// Convert to common.Record interface for generic processing
 	var genericRecords []common.Record
 	for i := range records {
 		genericRecords = append(genericRecords, &records[i])
@@ -212,16 +222,30 @@ func runLogCommand(path, format, outputFile string) {
 func printRecordsJSON(records []common.Record, pathForFiles string, writer io.Writer) {
 	var outputRecords []map[string]interface{}
 	for _, rec := range records {
-		jsonRecBytes, err := json.Marshal(common.ToJSONRecord(rec))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error marshalling record: %v\n", err)
-			continue
-		}
 		var m map[string]interface{}
-		if err := json.Unmarshal(jsonRecBytes, &m); err != nil {
-			fmt.Fprintf(os.Stderr, "Error unmarshalling record to map: %v\n", err)
+		// Use a type switch to manually build the map for each concrete type.
+		switch v := rec.(type) {
+		case *common.KeyValueRecord:
+			m = map[string]interface{}{
+				"offset":          v.GetOffset(),
+				"key":             common.BytesToEscapedString(v.Key),
+				"value":           common.BytesToEscapedString(v.Value),
+				"sequence_number": v.GetSequenceNumber(),
+				"record_type":     v.RecordType,
+			}
+		case *common.ParsedInternalKey:
+			m = map[string]interface{}{
+				"offset":          v.GetOffset(),
+				"key":             common.BytesToEscapedString(v.Key),
+				"value":           common.BytesToEscapedString(v.Value),
+				"sequence_number": v.GetSequenceNumber(),
+				"record_type":     v.RecordType,
+			}
+		default:
+			fmt.Fprintf(os.Stderr, "Warning: unknown record type in printRecordsJSON: %T\n", v)
 			continue
 		}
+
 		if pathForFiles != "" {
 			m["path"] = pathForFiles
 		}
@@ -237,14 +261,28 @@ func printRecordsJSON(records []common.Record, pathForFiles string, writer io.Wr
 
 // printRecordJSONL prints a single record as a one-line JSON object.
 func printRecordJSONL(rec common.Record, pathForFile string, writer io.Writer) {
-	jsonRecBytes, err := json.Marshal(common.ToJSONRecord(rec))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error marshalling record: %v\n", err)
-		return
-	}
 	var m map[string]interface{}
-	if err := json.Unmarshal(jsonRecBytes, &m); err != nil {
-		fmt.Fprintf(os.Stderr, "Error unmarshalling record to map: %v\n", err)
+
+	// Use a type switch to manually build the map for each concrete type.
+	switch v := rec.(type) {
+	case *common.KeyValueRecord:
+		m = map[string]interface{}{
+			"offset":          v.GetOffset(),
+			"key":             common.BytesToEscapedString(v.Key),
+			"value":           common.BytesToEscapedString(v.Value),
+			"sequence_number": v.GetSequenceNumber(),
+			"record_type":     v.RecordType,
+		}
+	case *common.ParsedInternalKey:
+		m = map[string]interface{}{
+			"offset":          v.GetOffset(),
+			"key":             common.BytesToEscapedString(v.Key),
+			"value":           common.BytesToEscapedString(v.Value),
+			"sequence_number": v.GetSequenceNumber(),
+			"record_type":     v.RecordType,
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "Warning: unknown record type in printRecordJSONL: %T\n", v)
 		return
 	}
 
