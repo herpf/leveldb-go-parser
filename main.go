@@ -4,13 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"sort"
-
+	"leveldb-parser-go/indexeddb"
 	"leveldb-parser-go/leveldb/common"
 	"leveldb-parser-go/leveldb/db"
 	"leveldb-parser-go/leveldb/ldb"
 	"leveldb-parser-go/leveldb/log"
+	"os"
+	"sort"
+
+	"runtime/debug"
 
 	"github.com/alecthomas/kingpin/v2"
 )
@@ -35,9 +37,15 @@ var (
 	logPath       = logCmd.Arg("path", "Path to the .log file.").Required().String()
 	logFormat     = logCmd.Flag("format", "Output format ('json' or 'jsonl').").Default("json").Enum("json", "jsonl")
 	logOutputFile = logCmd.Flag("output-file", "Save output to a file.").Short('o').String()
+
+	indexedDbCmd        = app.Command("indexeddb", "Parse a Chromium IndexedDB directory.")
+	indexedDbPath       = indexedDbCmd.Arg("path", "Path to the IndexedDB (LevelDB) directory.").Required().String()
+	indexedDbFormat     = indexedDbCmd.Flag("format", "Output format ('json' or 'jsonl').").Default("json").Enum("json", "jsonl")
+	indexedDbOutputFile = indexedDbCmd.Flag("output-file", "Save output to a file.").Short('o').String()
 )
 
 func main() {
+	debug.SetTraceback("crash") // Enables full stack trace on panic
 	// Determine which command was parsed
 	switch kingpin.MustParse(app.Parse(os.Args[1:])) {
 	case dbCmd.FullCommand():
@@ -46,6 +54,8 @@ func main() {
 		runLdbCommand(*ldbPath, *ldbFormat, *ldbOutputFile)
 	case logCmd.FullCommand():
 		runLogCommand(*logPath, *logFormat, *logOutputFile)
+	case indexedDbCmd.FullCommand():
+		runIndexedDBCommand(*indexedDbPath, *indexedDbFormat, *indexedDbOutputFile)
 	}
 }
 
@@ -55,6 +65,59 @@ func getOutputWriter(outputFile string) (io.WriteCloser, error) {
 		return os.Create(outputFile)
 	}
 	return os.Stdout, nil
+}
+
+func runIndexedDBCommand(path, format, outputFile string) {
+	fmt.Fprintf(os.Stderr, "🔎 Parsing IndexedDB directory: %s\n", path)
+	reader, err := indexeddb.NewFolderReader(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating IndexedDB folder reader: %v\n", err)
+		os.Exit(1)
+	}
+
+	records, err := reader.GetRecords()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting IndexedDB records: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Sort by sequence number for chronological order
+	sort.Slice(records, func(i, j int) bool {
+		seqI := records[i].SequenceNumber
+		seqJ := records[j].SequenceNumber
+		if seqI != seqJ {
+			return seqI < seqJ
+		}
+		return records[i].Offset < records[j].Offset
+	})
+
+	writer, err := getOutputWriter(outputFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)
+		os.Exit(1)
+	}
+	defer writer.Close()
+
+	if format == "jsonl" {
+		for _, rec := range records {
+			line, err := json.Marshal(rec)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error marshalling record to JSONL: %v\n", err)
+				continue
+			}
+			fmt.Fprintln(writer, string(line))
+		}
+	} else {
+		encoder := json.NewEncoder(writer)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(records); err != nil {
+			fmt.Fprintf(os.Stderr, "Error encoding JSON: %v\n", err)
+		}
+	}
+
+	if outputFile != "" {
+		fmt.Fprintf(os.Stderr, "✅ Output successfully saved to %s\n", outputFile)
+	}
 }
 
 func runDbCommand(path, format, outputFile string) {
