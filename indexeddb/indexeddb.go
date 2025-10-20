@@ -3,8 +3,8 @@ package indexeddb
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 
+	"leveldb-parser-go/config"
 	"leveldb-parser-go/indexeddb/chromium"
 	"leveldb-parser-go/leveldb/db"
 )
@@ -49,39 +49,26 @@ func (fr *FolderReader) GetRecords() ([]*IndexedDBRecord, error) {
 		valueData := rec.Record.GetValue()
 		recordOffset := rec.Record.GetOffset() // Store offset for logging
 
-		if recordOffset == 264328 {
-			fmt.Fprintf(os.Stderr, "!!!!!!!! TARGET RECORD PRE-PARSE (IndexedDB) !!!!!!!! Path: %s, Offset: %d, KeyHex: %x, ValueHex(first 64b): %x\n", rec.Path, recordOffset, keyData, valueData[:min(len(valueData), 64)])
-		}
-
 		parsedKey, err := chromium.ParseKey(keyData)
 		if err != nil {
-			if recordOffset == 264328 {
-				fmt.Fprintf(os.Stderr, "!!!!!!!! TARGET RECORD KEY PARSE FAILED !!!!!!!! Error: %v, Raw Key (hex): %x\n", err, keyData)
-			}
-			fmt.Fprintf(os.Stderr, "Debug: Skipping key in %s (offset %d) due to KEY parsing error. Error: %v. Raw Key (hex): %x\n",
+
+			config.VerboseLogger.Printf("Debug: Skipping key in %s (offset %d) due to KEY parsing error. Error: %v. Raw Key (hex): %x",
 				rec.Path, recordOffset, err, keyData)
 			continue
 		}
 
 		keyJSON, _ := json.Marshal(parsedKey)
-		fmt.Fprintf(os.Stderr, "Debug: Parsed Key OK in %s (offset %d): %s\n", rec.Path, recordOffset, string(keyJSON))
-		if recordOffset == 264328 {
-			fmt.Fprintf(os.Stderr, "!!!!!!!! TARGET RECORD KEY PARSE OK !!!!!!!! Parsed Key: %s\n", string(keyJSON))
-		}
+		config.VerboseLogger.Printf("Debug: Parsed Key OK in %s (offset %d): %s", rec.Path, recordOffset, string(keyJSON))
+
 		parsedValue, err := parsedKey.ParseValue(valueData)
 		if err != nil {
-			if recordOffset == 264328 {
-				fmt.Fprintf(os.Stderr, "!!!!!!!! TARGET RECORD VALUE PARSE FAILED !!!!!!!! Error: %v, Raw Value (hex): %x\n", err, valueData)
-			}
-			fmt.Fprintf(os.Stderr, "Warning: could not parse VALUE for key type %T in %s (offset %d): %v. Raw Value (hex): %x\n",
+
+			config.VerboseLogger.Printf("Warning: could not parse VALUE for key type %T in %s (offset %d): %v. Raw Value (hex): %x",
 				parsedKey, rec.Path, recordOffset, err, valueData)
 		}
 
-		if recordOffset == 264328 {
-			fmt.Fprintf(os.Stderr, "!!!!!!!! TARGET RECORD VALUE PARSE OK !!!!!!!!\n")
-		}
 		if objVal, ok := parsedValue.(*chromium.ObjectStoreDataValue); ok {
-			fmt.Fprintf(os.Stderr, "Value type for offset %d: %T\n", recordOffset, objVal.Value)
+			config.VerboseLogger.Printf("Value type for offset %d: %T", recordOffset, objVal.Value)
 			if objVal.Value != nil {
 				if mapVal, ok := objVal.Value.(map[string]any); ok {
 					objVal.Value = removeNulls(mapVal)
@@ -90,7 +77,7 @@ func (fr *FolderReader) GetRecords() ([]*IndexedDBRecord, error) {
 				} else if jsArr, ok := objVal.Value.(*chromium.JSArray); ok {
 					objVal.Value = removeNulls(jsArr)
 				} else {
-					fmt.Fprintf(os.Stderr, "Warning: Unsupported type for removeNulls at offset %d: %T\n", recordOffset, objVal.Value)
+					config.VerboseLogger.Printf("Warning: Unsupported type for removeNulls at offset %d: %T", recordOffset, objVal.Value)
 					// Add handling for additional types here if needed. For example, for JSMap:
 					// if mapEntry, ok := objVal.Value.([]chromium.JSMapEntry); ok {
 					//   var cleaned []chromium.JSMapEntry
@@ -110,7 +97,7 @@ func (fr *FolderReader) GetRecords() ([]*IndexedDBRecord, error) {
 				}
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "Warning: parsedValue not ObjectStoreDataValue at offset %d: %T\n", recordOffset, parsedValue)
+			config.VerboseLogger.Printf("Warning: parsedValue not ObjectStoreDataValue at offset %d: %T", recordOffset, parsedValue)
 		}
 
 		indexedDBRecords = append(indexedDBRecords, &IndexedDBRecord{

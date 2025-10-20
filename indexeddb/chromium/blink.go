@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
 
+	"leveldb-parser-go/config"
 	"leveldb-parser-go/leveldb/common"
 
 	"github.com/golang/snappy"
@@ -27,7 +27,6 @@ type ObjectStoreDataValue struct {
 	Value   any `json:"value,omitempty"`
 }
 
-// BlobReference remains the same
 type BlobReference struct {
 	Type      string `json:"type"`
 	BlobSize  uint64 `json:"blob_size"`
@@ -162,7 +161,6 @@ func (d *V8Deserializer) ReadJSArrayBufferView(buffer []byte) (*ArrayBufferView,
 		return nil, fmt.Errorf("failed to read arraybufferview length: %w", err)
 	}
 	// v8.py checks version >= 14. Let's assume we need to read flags.
-	// If the python code supports version 15, we must support flags.
 	_, flags, err := d.decoder.DecodeVarint()
 	if err != nil {
 		// This might fail if version < 14.
@@ -173,14 +171,13 @@ func (d *V8Deserializer) ReadJSArrayBufferView(buffer []byte) (*ArrayBufferView,
 		}
 	}
 	// Create a new slice representing the view
-	// Note: Python returns a class, we return the struct
 	// We can also return the sliced bytes directly if preferred
 	var viewBytes []byte
 	if buffer != nil && byteOffset+byteLength <= uint64(len(buffer)) {
 		viewBytes = buffer[byteOffset : byteOffset+byteLength]
 	} else if buffer != nil {
 		// This indicates a corrupt view, but we'll return what we can
-		fmt.Fprintf(os.Stderr, "Debug: ArrayBufferView out of bounds (offset %d, length %d, buffer %d)\n", byteOffset, byteLength, len(buffer))
+		config.VerboseLogger.Printf("Debug: ArrayBufferView out of bounds (offset %d, length %d, buffer %d)", byteOffset, byteLength, len(buffer))
 		viewBytes = buffer // return full buffer as fallback
 	}
 	return &ArrayBufferView{
@@ -394,7 +391,7 @@ func (d *V8Deserializer) ReadJSObject() (map[string]any, error) {
 		return nil, err
 	}
 	if int(expected) != num {
-		fmt.Fprintf(os.Stderr, "Warning: JSObject expected %d properties, got %d\n", expected, num)
+		config.VerboseLogger.Printf("Warning: JSObject expected %d properties, got %d", expected, num)
 	}
 	d.assignNextID(jsObject)
 	return jsObject, nil
@@ -539,7 +536,7 @@ func (bd *BlinkDeserializer) ReadHostObject(d *V8Deserializer) (any, error) {
 
 // Modify parseBlink slightly to handle the error return from parseBlink
 func parseBlink(data []byte, version int) (any, error) {
-	fmt.Fprintf(os.Stderr, "Debug: parseBlink received data (hex): %x\n", data)
+	config.VerboseLogger.Printf("Debug: parseBlink received data (hex): %x", data)
 	if len(data) == 0 {
 		return &ObjectStoreDataValue{Version: version}, nil
 	}
@@ -552,14 +549,11 @@ func parseBlink(data []byte, version int) (any, error) {
 	if ref, ok := value.(*v8ReferenceWrapper); ok {
 		value = ref.Value
 	}
-	fmt.Fprintf(os.Stderr, "Debug: parseBlink result (success): type %T\n", value) // Safer alternative
+	config.VerboseLogger.Printf("Debug: parseBlink result (success): type %T", value) // Safer alternative
 	// This helps make byte data searchable
 	if view, ok := value.(*ArrayBufferView); ok {
 		// Attempt to convert to string. This is good for forensics.
 		// If it's not text, it'll be garbage, but searchable garbage.
-		// The python tool seems to return a list of ints.
-		// Returning the raw bytes (view.Buffer) is also an option.
-		// Let's return the struct itself, JSON marshalling will handle it.
 		return &ObjectStoreDataValue{
 			Version: version,
 			Value:   view,
@@ -712,7 +706,7 @@ func (d *V8Deserializer) ReadDenseJSArray() (any, error) {
 		return nil, err
 	}
 	if int(expectedNum) != num || int(expectedLength) != int(length) {
-		fmt.Fprintf(os.Stderr, "Warning: DenseJSArray expected num %d length %d, got num %d length %d\n", expectedNum, expectedLength, num, length)
+		config.VerboseLogger.Printf("Warning: DenseJSArray expected num %d length %d, got num %d length %d", expectedNum, expectedLength, num, length)
 	}
 	d.assignNextID(arr)
 	return arr, nil
@@ -744,7 +738,7 @@ func (d *V8Deserializer) ReadSparseJSArray() (any, error) {
 		return nil, err
 	}
 	if int(expectedNum) != num || int(expectedLength) != int(length) {
-		fmt.Fprintf(os.Stderr, "Warning: SparseJSArray expected num %d length %d, got num %d length %d\n", expectedNum, expectedLength, num, length)
+		config.VerboseLogger.Printf("Warning: SparseJSArray expected num %d length %d, got num %d length %d", expectedNum, expectedLength, num, length)
 	}
 	d.assignNextID(arr)
 	return arr, nil
@@ -782,7 +776,7 @@ func (d *V8Deserializer) ReadJSMap() (any, error) {
 		return nil, err
 	}
 	if int(expected) != len(entries)*2 {
-		fmt.Fprintf(os.Stderr, "Warning: JSMap expected %d, got %d\n", expected, len(entries)*2)
+		config.VerboseLogger.Printf("Warning: JSMap expected %d, got %d", expected, len(entries)*2)
 	}
 	d.assignNextID(entries)
 	return entries, nil
@@ -821,7 +815,7 @@ func (d *V8Deserializer) ReadJSSet() (any, error) {
 		return nil, err
 	}
 	if int(expected) != len(jsSet) {
-		fmt.Fprintf(os.Stderr, "Warning: JSSet expected %d, got %d\n", expected, len(jsSet))
+		config.VerboseLogger.Printf("Warning: JSSet expected %d, got %d", expected, len(jsSet))
 	}
 	d.assignNextID(jsSet)
 	return jsSet, nil
@@ -835,7 +829,7 @@ func (d *V8Deserializer) ReadBigInt() (any, error) {
 	byteCount := bitField >> 1
 	isNegative := (bitField & 0x1) == 1
 	// Add logging to debug
-	fmt.Fprintf(os.Stderr, "Debug: ReadBigInt bitField=%d, byteCount=%d\n", bitField, byteCount)
+	config.VerboseLogger.Printf("Debug: ReadBigInt bitField=%d, byteCount=%d", bitField, byteCount)
 	if byteCount > uint64(math.MaxInt64) {
 		// Cannot safely cast to int64 for seek; treat as corrupt
 		return fmt.Sprintf("<bigint_invalid_size: too large (%d)>", byteCount), nil

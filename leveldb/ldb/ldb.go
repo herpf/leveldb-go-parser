@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 
+	"leveldb-parser-go/config"
 	"leveldb-parser-go/leveldb/common"
 
 	"github.com/golang/snappy"
@@ -72,7 +73,7 @@ func (b *Block) GetRecords() ([]common.KeyValueRecord, error) {
 
 	trailerSize := (int(numRestarts) + 1) * BlockRestartEntryLength
 	if trailerSize > len(buffer) {
-		fmt.Fprintf(os.Stderr, "Warning: block at offset %d has corrupt trailer. Num restarts (%d) is too large for buffer size (%d).\n", b.BlockOffset, numRestarts, len(buffer))
+		config.VerboseLogger.Printf("Warning: block at offset %d has corrupt trailer. Num restarts (%d) is too large for buffer size (%d).\n", b.BlockOffset, numRestarts, len(buffer))
 		return []common.KeyValueRecord{}, nil
 	}
 
@@ -91,7 +92,7 @@ func (b *Block) GetRecords() ([]common.KeyValueRecord, error) {
 			if err == io.ErrUnexpectedEOF {
 				break
 			}
-			fmt.Fprintf(os.Stderr, "Warning: Corrupt record in LDB block at offset %d: %v. Attempting to recover.\n", b.BlockOffset+decoder.Offset(), err)
+			config.VerboseLogger.Printf("Warning: Corrupt record in LDB block at offset %d: %v. Attempting to recover.\n", b.BlockOffset+decoder.Offset(), err)
 			sharedKey = []byte{}
 			return nil, fmt.Errorf("failed to decode key-value record: %w", err)
 		}
@@ -258,17 +259,17 @@ func (fr *FileReader) GetKeyValueRecords() ([]common.KeyValueRecord, error) {
 		blockHandle, err := decodeBlockHandle(handleDecoder, indexRecord.Offset)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode block handle: %w", err)
-			// fmt.Fprintf(os.Stderr, "Warning: failed to decode block handle: %v\n", err)
+			// config.VerboseLogger.Printf( "Warning: failed to decode block handle: %v\n", err)
 		}
 		dataBlock, err := blockHandle.Load(f)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load data block: %w", err)
-			// fmt.Fprintf(os.Stderr, "Warning: failed to load data block: %v\n", err)
+			// config.VerboseLogger.Printf( "Warning: failed to load data block: %v\n", err)
 		}
 		dataRecords, err := dataBlock.GetRecords()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get records from data block: %w", err)
-			// fmt.Fprintf(os.Stderr, "Warning: failed to get records from data block: %v\n", err)
+			// config.VerboseLogger.Printf( "Warning: failed to get records from data block: %v\n", err)
 		}
 		allRecords = append(allRecords, dataRecords...)
 	}

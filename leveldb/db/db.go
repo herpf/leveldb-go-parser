@@ -4,14 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"leveldb-parser-go/config"
+	"leveldb-parser-go/leveldb/common"
+	"leveldb-parser-go/leveldb/ldb"
+	"leveldb-parser-go/leveldb/log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"leveldb-parser-go/leveldb/common"
-	"leveldb-parser-go/leveldb/ldb"
-	"leveldb-parser-go/leveldb/log"
 )
 
 // LevelDBRecord wraps a record with its source path and recovery status.
@@ -67,7 +67,7 @@ func (fr *FolderReader) GetRecords() ([]*LevelDBRecord, error) {
 			reader := log.NewFileReader(path)
 			parsedKeys, parseErr := reader.GetParsedInternalKeys()
 			if parseErr != nil {
-				fmt.Fprintf(os.Stderr, "Warning: could not parse log file %s: %v\n", path, parseErr)
+				config.VerboseLogger.Printf("Warning: could not parse log file %s: %v", path, parseErr)
 				return nil
 			}
 			for i := range parsedKeys {
@@ -77,12 +77,12 @@ func (fr *FolderReader) GetRecords() ([]*LevelDBRecord, error) {
 			recordSourceType = "LDB"
 			reader, parseErr := ldb.NewFileReader(path)
 			if parseErr != nil {
-				fmt.Fprintf(os.Stderr, "Warning: could not parse ldb file %s: %v\n", path, parseErr)
+				config.VerboseLogger.Printf("Warning: could not parse ldb file %s: %v", path, parseErr)
 				return nil
 			}
 			keyValueRecords, parseErr := reader.GetKeyValueRecords()
 			if parseErr != nil {
-				fmt.Fprintf(os.Stderr, "Warning: could not parse ldb records from %s: %v\n", path, parseErr)
+				config.VerboseLogger.Printf("Warning: could not parse ldb records from %s: %v", path, parseErr)
 				return nil
 			}
 			for i := range keyValueRecords {
@@ -92,13 +92,10 @@ func (fr *FolderReader) GetRecords() ([]*LevelDBRecord, error) {
 			return nil
 		}
 
-		fmt.Fprintf(os.Stderr, "Debug-DB: Processing %d records from %s (%s)\n", len(currentRecords), path, recordSourceType)
+		config.VerboseLogger.Printf(" Processing %d records from %s (%s)", len(currentRecords), path, recordSourceType)
 		for _, rec := range currentRecords {
-			fmt.Fprintf(os.Stderr, "Debug-DB: Raw record from %s (Offset: %d, Type: %T, KeyHex: %x)\n",
+			config.VerboseLogger.Printf(" Raw record from %s (Offset: %d, Type: %T, KeyHex: %x)",
 				path, rec.GetOffset(), rec, rec.GetKey())
-			if rec.GetOffset() == 264328 {
-				fmt.Fprintf(os.Stderr, "!!!!!!!! TARGET RECORD READ (DB) !!!!!!!! Path: %s, Offset: %d, Type: %T, KeyHex: %x\n", path, rec.GetOffset(), rec, rec.GetKey())
-			}
 		}
 
 		// Group records by their key.
@@ -124,7 +121,7 @@ func (fr *FolderReader) GetRecords() ([]*LevelDBRecord, error) {
 	for keyStr, recordsForKey := range unsortedRecords {
 
 		keyJSON, _ := json.Marshal(keyStr) // Escape the key string for logging
-		fmt.Fprintf(os.Stderr, "Debug-DB: Grouping %d records for key: %s\n", len(recordsForKey), string(keyJSON))
+		config.VerboseLogger.Printf("Debug-DB: Grouping %d records for key: %s", len(recordsForKey), string(keyJSON))
 
 		sort.Slice(recordsForKey, func(i, j int) bool {
 			if recordsForKey[i].Record.GetSequenceNumber() != recordsForKey[j].Record.GetSequenceNumber() {
