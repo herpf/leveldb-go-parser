@@ -6,6 +6,9 @@ import (
 	"io"
 	"strings"
 	"unicode"
+
+	xunicode "golang.org/x/text/encoding/unicode"
+	"golang.org/x/text/transform"
 )
 
 // Record is an interface for common fields between record types,
@@ -13,6 +16,8 @@ import (
 type Record interface {
 	GetSequenceNumber() uint64
 	GetKey() []byte
+	GetValue() []byte
+	GetType() byte
 	GetOffset() int64
 }
 
@@ -25,14 +30,11 @@ type KeyValueRecord struct {
 	RecordType     byte   `json:"record_type"`
 }
 
-// GetSequenceNumber returns the sequence number.
 func (r *KeyValueRecord) GetSequenceNumber() uint64 { return r.SequenceNumber }
-
-// GetKey returns the key.
-func (r *KeyValueRecord) GetKey() []byte { return r.Key }
-
-// GetOffset returns the file offset.
-func (r *KeyValueRecord) GetOffset() int64 { return r.Offset }
+func (r *KeyValueRecord) GetKey() []byte            { return r.Key }
+func (r *KeyValueRecord) GetValue() []byte          { return r.Value }
+func (r *KeyValueRecord) GetType() byte             { return r.RecordType }
+func (r *KeyValueRecord) GetOffset() int64          { return r.Offset }
 
 // ParsedInternalKey corresponds to the ParsedInternalKey class in log.py
 type ParsedInternalKey struct {
@@ -41,19 +43,16 @@ type ParsedInternalKey struct {
 	SequenceNumber uint64 `json:"sequence_number"`
 	Key            []byte `json:"-"`
 	Value          []byte `json:"-"`
+	Recovered      bool   `json:"-"`
 }
 
-// GetSequenceNumber returns the sequence number.
 func (r *ParsedInternalKey) GetSequenceNumber() uint64 { return r.SequenceNumber }
-
-// GetKey returns the key.
-func (r *ParsedInternalKey) GetKey() []byte { return r.Key }
-
-// GetOffset returns the file offset.
-func (r *ParsedInternalKey) GetOffset() int64 { return r.Offset }
+func (r *ParsedInternalKey) GetKey() []byte            { return r.Key }
+func (r *ParsedInternalKey) GetValue() []byte          { return r.Value }
+func (r *ParsedInternalKey) GetType() byte             { return r.RecordType }
+func (r *ParsedInternalKey) GetOffset() int64          { return r.Offset }
 
 // JSONRecord is used for custom JSON output with escaped strings.
-// This provides a clean and readable representation of record data.
 type JSONRecord struct {
 	Offset         int64  `json:"offset"`
 	RecordType     byte   `json:"record_type"`
@@ -64,25 +63,12 @@ type JSONRecord struct {
 
 // ToJSONRecord converts any Record type to a JSON-friendly format.
 func ToJSONRecord(rec Record) JSONRecord {
-	var recordType byte
-	var value []byte
-
-	// Type switch to handle different underlying record structs.
-	switch r := rec.(type) {
-	case *KeyValueRecord:
-		recordType = r.RecordType
-		value = r.Value
-	case *ParsedInternalKey:
-		recordType = r.RecordType
-		value = r.Value
-	}
-
 	return JSONRecord{
 		Offset:         rec.GetOffset(),
-		RecordType:     recordType,
+		RecordType:     rec.GetType(),
 		SequenceNumber: rec.GetSequenceNumber(),
 		Key:            BytesToEscapedString(rec.GetKey()),
-		Value:          BytesToEscapedString(value),
+		Value:          BytesToEscapedString(rec.GetValue()),
 	}
 }
 
@@ -90,11 +76,9 @@ func ToJSONRecord(rec Record) JSONRecord {
 func BytesToEscapedString(b []byte) string {
 	var sb strings.Builder
 	for _, c := range b {
-		// Keep printable characters as-is, except for backslash.
 		if unicode.IsPrint(rune(c)) && c != '\\' {
 			sb.WriteByte(c)
 		} else {
-			// Escape non-printable characters and backslash.
 			sb.WriteString(fmt.Sprintf("\\x%02x", c))
 		}
 	}
@@ -103,133 +87,215 @@ func BytesToEscapedString(b []byte) string {
 
 // LevelDBDecoder is a helper to decode data types from a stream.
 type LevelDBDecoder struct {
-	r   io.ReaderAt
-	pos int64
+	reader io.ReadSeeker
 }
 
 // NewLevelDBDecoder creates a new decoder.
-func NewLevelDBDecoder(r io.ReaderAt) *LevelDBDecoder {
-	return &LevelDBDecoder{r: r}
+func NewLevelDBDecoder(r io.ReadSeeker) *LevelDBDecoder {
+	return &LevelDBDecoder{reader: r}
 }
 
-// Pos returns the current position of the decoder.
-func (d *LevelDBDecoder) Pos() int64 {
-	return d.pos
+// GetReader exposes the underlying reader.
+func (d *LevelDBDecoder) GetReader() io.Reader {
+	return d.reader
 }
 
-// SetPos sets the current position of the decoder.
-func (d *LevelDBDecoder) SetPos(pos int64) {
-	d.pos = pos
+// Offset returns the current reading position.
+func (d *LevelDBDecoder) Offset() int64 {
+	pos, _ := d.reader.Seek(0, io.SeekCurrent)
+	return pos
 }
 
-// Seek sets the decoder's internal position. It currently only supports io.SeekStart.
+// Seek sets the decoder's internal position.
 func (d *LevelDBDecoder) Seek(offset int64, whence int) (int64, error) {
-	if whence == io.SeekStart {
-		d.pos = offset
-		return d.pos, nil
-	}
-	return d.pos, fmt.Errorf("unsupported seek whence: %d", whence)
-}
-
-type byteReader struct {
-	r   io.ReaderAt
-	pos *int64
-}
-
-func (br byteReader) ReadByte() (byte, error) {
-	var b [1]byte
-	n, err := br.r.ReadAt(b[:], *br.pos)
-	if n > 0 {
-		(*br.pos)++
-	}
-	return b[0], err
+	return d.reader.Seek(offset, whence)
 }
 
 // ReadBytes reads n bytes from the current position.
 func (d *LevelDBDecoder) ReadBytes(n int) (int64, []byte, error) {
-	startPos := d.pos
+	startPos := d.Offset()
 	buf := make([]byte, n)
-	sr := io.NewSectionReader(d.r, d.pos, int64(n))
-	read, err := io.ReadFull(sr, buf)
+	read, err := io.ReadFull(d.reader, buf)
 	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 		return startPos, nil, err
 	}
-	d.pos += int64(read)
 	return startPos, buf[:read], nil
 }
 
-// DecodeUint64Varint decodes a variable-length unsigned 64-bit integer.
-func (d *LevelDBDecoder) DecodeUint64Varint() (int64, uint64, error) {
-	startPos := d.pos
-	val, err := binary.ReadUvarint(byteReader{d.r, &d.pos})
+func (d *LevelDBDecoder) DecodeUint64() (int64, uint64, error) {
+	startPos := d.Offset()
+	var val uint64
+	err := binary.Read(d.reader, binary.LittleEndian, &val)
 	return startPos, val, err
 }
 
-// DecodeUint32Varint decodes a variable-length unsigned 32-bit integer.
-func (d *LevelDBDecoder) DecodeUint32Varint() (int64, uint32, error) {
-	startPos := d.pos
-	val, err := binary.ReadUvarint(byteReader{d.r, &d.pos})
-	return startPos, uint32(val), err
-}
-
-// DecodeUint64 decodes a fixed-size unsigned 64-bit integer.
-func (d *LevelDBDecoder) DecodeUint64() (int64, uint64, error) {
-	startPos := d.pos
-	_, buf, err := d.ReadBytes(8)
-	if err != nil {
-		return startPos, 0, err
-	}
-	if len(buf) < 8 {
-		return startPos, 0, io.ErrUnexpectedEOF
-	}
-	return startPos, binary.LittleEndian.Uint64(buf), nil
-}
-
-// DecodeUint32 decodes a fixed-size unsigned 32-bit integer.
 func (d *LevelDBDecoder) DecodeUint32() (int64, uint32, error) {
-	startPos := d.pos
-	_, buf, err := d.ReadBytes(4)
-	if err != nil {
-		return startPos, 0, err
-	}
-	if len(buf) < 4 {
-		return startPos, 0, io.ErrUnexpectedEOF
-	}
-	return startPos, binary.LittleEndian.Uint32(buf), nil
+	startPos := d.Offset()
+	var val uint32
+	err := binary.Read(d.reader, binary.LittleEndian, &val)
+	return startPos, val, err
 }
 
-// DecodeUint16 decodes a fixed-size unsigned 16-bit integer.
+func (d *LevelDBDecoder) DecodeUint64BE() (int64, uint64, error) {
+	startPos := d.Offset()
+	var val uint64
+	err := binary.Read(d.reader, binary.BigEndian, &val)
+	return startPos, val, err
+}
+
+func (d *LevelDBDecoder) DecodeUint32BE() (int64, uint32, error) {
+	startPos := d.Offset()
+	var val uint32
+	err := binary.Read(d.reader, binary.BigEndian, &val)
+	return startPos, val, err
+}
+
 func (d *LevelDBDecoder) DecodeUint16() (int64, uint16, error) {
-	startPos := d.pos
-	_, buf, err := d.ReadBytes(2)
-	if err != nil {
-		return startPos, 0, err
-	}
-	if len(buf) < 2 {
-		return startPos, 0, io.ErrUnexpectedEOF
-	}
-	return startPos, binary.LittleEndian.Uint16(buf), nil
+	startPos := d.Offset()
+	var val uint16
+	err := binary.Read(d.reader, binary.LittleEndian, &val)
+	return startPos, val, err
 }
 
-// DecodeUint8 decodes a single byte.
 func (d *LevelDBDecoder) DecodeUint8() (int64, uint8, error) {
-	startPos := d.pos
-	_, buf, err := d.ReadBytes(1)
+	startPos := d.Offset()
+	var val uint8
+	err := binary.Read(d.reader, binary.LittleEndian, &val)
+	return startPos, val, err
+}
+
+// DecodeInt reads a little-endian integer of a specific byte count.
+func (d *LevelDBDecoder) DecodeInt(byteCount int) (int64, uint64, error) {
+	startPos := d.Offset()
+	if byteCount > 8 || byteCount < 1 {
+		return startPos, 0, fmt.Errorf("invalid byte count for DecodeInt: %d", byteCount)
+	}
+	_, data, err := d.ReadBytes(byteCount)
 	if err != nil {
 		return startPos, 0, err
 	}
-	if len(buf) < 1 {
-		return startPos, 0, io.ErrUnexpectedEOF
+
+	paddedData := make([]byte, 8)
+	copy(paddedData, data)
+	val := binary.LittleEndian.Uint64(paddedData)
+	return startPos, val, nil
+}
+
+// DecodeDouble reads a 64-bit float.
+func (d *LevelDBDecoder) DecodeDouble() (int64, float64, error) {
+	startPos := d.Offset()
+	var val float64
+	err := binary.Read(d.reader, binary.LittleEndian, &val)
+	return d.Offset() - startPos, val, err
+}
+
+// simpleByteReader is a helper to adapt an io.Reader to an io.ByteReader
+type simpleByteReader struct{ io.Reader }
+
+func (sbr simpleByteReader) ReadByte() (byte, error) {
+	var b [1]byte
+	_, err := sbr.Read(b[:])
+	return b[0], err
+}
+
+// DecodeVarint reads a variable-length integer (varint).
+func (d *LevelDBDecoder) DecodeVarint() (int64, uint64, error) {
+	startPos := d.Offset()
+	val, err := binary.ReadUvarint(simpleByteReader{d.reader})
+	return startPos, val, err
+}
+
+// DecodeUTF16StringWithLengthBigEndian decodes a UTF-16 BE string.
+// This is used by IndexedDB keys, which (unlike V8 values) use big endian.
+func (d *LevelDBDecoder) DecodeUTF16StringWithLengthBigEndian() (int64, string, error) {
+	startPos := d.Offset()
+	_, length, err := d.DecodeVarint()
+	if err != nil {
+		return startPos, "", fmt.Errorf("failed to read string length: %w", err)
 	}
-	return startPos, buf[0], nil
+
+	_, utf16Bytes, err := d.ReadBytes(int(length))
+	if err != nil {
+		return startPos, "", fmt.Errorf("failed to read string content: %w", err)
+	}
+
+	// Use BigEndian decoder
+	decoder := xunicode.UTF16(xunicode.BigEndian, xunicode.IgnoreBOM).NewDecoder()
+	utf8Bytes, _, err := transform.Bytes(decoder, utf16Bytes)
+	if err != nil {
+		// Return the raw hex on failure, it's better than nothing
+		return d.Offset() - startPos, fmt.Sprintf("<undecodable_utf16_be_hex:%x>", utf16Bytes), nil
+	}
+
+	return d.Offset() - startPos, string(utf8Bytes), nil
+}
+
+func (d *LevelDBDecoder) DecodeUTF16StringWithLength() (int64, string, error) {
+	startPos := d.Offset()
+	_, length, err := d.DecodeVarint()
+	if err != nil {
+		return startPos, "", fmt.Errorf("failed to read string length: %w", err)
+	}
+
+	_, utf16Bytes, err := d.ReadBytes(int(length))
+	if err != nil {
+		return startPos, "", fmt.Errorf("failed to read string content: %w", err)
+	}
+
+	decoder := xunicode.UTF16(xunicode.LittleEndian, xunicode.IgnoreBOM).NewDecoder()
+	utf8Bytes, _, err := transform.Bytes(decoder, utf16Bytes)
+	if err != nil {
+		return d.Offset() - startPos, fmt.Sprintf("<undecodable_utf16_hex:%x>", utf16Bytes), nil
+	}
+
+	return d.Offset() - startPos, string(utf8Bytes), nil
+}
+
+// DecodeUTF8StringWithLength decodes a UTF-8 string.
+func (d *LevelDBDecoder) DecodeUTF8StringWithLength() (int64, string, error) {
+	startPos := d.Offset()
+	_, length, err := d.DecodeVarint()
+	if err != nil {
+		return startPos, "", fmt.Errorf("failed to read string length: %w", err)
+	}
+
+	_, utf8Bytes, err := d.ReadBytes(int(length))
+	if err != nil {
+		return startPos, "", fmt.Errorf("failed to read string content: %w", err)
+	}
+	return d.Offset() - startPos, string(utf8Bytes), nil
 }
 
 // DecodeBlobWithLength decodes a blob prefixed with its varint length.
 func (d *LevelDBDecoder) DecodeBlobWithLength() (int64, []byte, error) {
-	offset, numBytes, err := d.DecodeUint64Varint()
+	startPos := d.Offset()
+	_, numBytes, err := d.DecodeVarint()
 	if err != nil {
-		return 0, nil, err
+		return startPos, nil, err
 	}
 	_, blob, err := d.ReadBytes(int(numBytes))
-	return offset, blob, err
+	return startPos, blob, err
+}
+
+// PeekBytes reads bytes without advancing the reader offset.
+func (d *LevelDBDecoder) PeekBytes(count int) ([]byte, error) {
+	currentOffset := d.Offset()
+	_, data, err := d.ReadBytes(count)
+	if err != nil {
+		// Even on error, try to rewind to the original position
+		d.Seek(currentOffset, io.SeekStart)
+		return nil, err
+	}
+	d.Seek(currentOffset, io.SeekStart) // Rewind
+	return data, nil
+}
+
+func (d *LevelDBDecoder) Remaining() (int64, error) {
+	current := d.Offset()
+	end, err := d.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, err
+	}
+	d.Seek(current, io.SeekStart)
+	return end - current, nil
 }

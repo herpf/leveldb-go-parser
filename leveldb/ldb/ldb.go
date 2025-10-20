@@ -77,9 +77,8 @@ func (b *Block) GetRecords() ([]common.KeyValueRecord, error) {
 	}
 
 	restartsOffset := len(buffer) - trailerSize
-	reader := bytes.NewReader(buffer[:restartsOffset])
-	// The decoder for in-memory buffers can use a simple bytes.Reader which implements io.ReaderAt.
-	decoder := common.NewLevelDBDecoder(reader)
+	// bytes.NewReader implements io.ReadSeeker, which our new decoder needs.
+	decoder := common.NewLevelDBDecoder(bytes.NewReader(buffer[:restartsOffset]))
 	var records []common.KeyValueRecord
 	var sharedKey []byte
 
@@ -89,10 +88,11 @@ func (b *Block) GetRecords() ([]common.KeyValueRecord, error) {
 			if err == io.EOF {
 				break
 			}
-			// Don't treat unexpected EOF as a fatal error for the whole block, just stop reading records.
 			if err == io.ErrUnexpectedEOF {
 				break
 			}
+			fmt.Fprintf(os.Stderr, "Warning: Corrupt record in LDB block at offset %d: %v. Attempting to recover.\n", b.BlockOffset+decoder.Offset(), err)
+			sharedKey = []byte{}
 			return nil, fmt.Errorf("failed to decode key-value record: %w", err)
 		}
 		records = append(records, record)
@@ -102,15 +102,15 @@ func (b *Block) GetRecords() ([]common.KeyValueRecord, error) {
 }
 
 func decodeKeyValueRecord(decoder *common.LevelDBDecoder, blockOffset int64, sharedKey []byte) (common.KeyValueRecord, []byte, error) {
-	offset, sharedBytes, err := decoder.DecodeUint32Varint()
+	offset, sharedBytes, err := decoder.DecodeVarint()
 	if err != nil {
 		return common.KeyValueRecord{}, nil, err
 	}
-	_, unsharedBytes, err := decoder.DecodeUint32Varint()
+	_, unsharedBytes, err := decoder.DecodeVarint()
 	if err != nil {
 		return common.KeyValueRecord{}, nil, err
 	}
-	_, valueLength, err := decoder.DecodeUint32Varint()
+	_, valueLength, err := decoder.DecodeVarint()
 	if err != nil {
 		return common.KeyValueRecord{}, nil, err
 	}
@@ -138,7 +138,7 @@ func decodeKeyValueRecord(decoder *common.LevelDBDecoder, blockOffset int64, sha
 	keyType := byte(sequenceAndType & 0xff)
 
 	return common.KeyValueRecord{
-		Offset:         offset + blockOffset,
+		Offset:         int64(offset) + blockOffset, // Cast offset to int64
 		Key:            key,
 		Value:          value,
 		SequenceNumber: sequenceNumber,
@@ -153,16 +153,16 @@ type BlockHandle struct {
 }
 
 func decodeBlockHandle(decoder *common.LevelDBDecoder, baseOffset int64) (BlockHandle, error) {
-	offset, blockOffset, err := decoder.DecodeUint64Varint()
+	offset, blockOffset, err := decoder.DecodeVarint()
 	if err != nil {
 		return BlockHandle{}, err
 	}
-	_, length, err := decoder.DecodeUint64Varint()
+	_, length, err := decoder.DecodeVarint()
 	if err != nil {
 		return BlockHandle{}, err
 	}
 	return BlockHandle{
-		Offset:      offset + baseOffset,
+		Offset:      int64(offset) + baseOffset,
 		BlockOffset: int64(blockOffset),
 		Length:      int(length),
 	}, nil
@@ -177,7 +177,7 @@ func (bh *BlockHandle) Load(f *os.File) (Block, error) {
 
 	footer := make([]byte, BlockTrailerSize)
 	_, err = f.ReadAt(footer, bh.BlockOffset+int64(bh.Length))
-	if err != nil && err != io.EOF { // EOF is okay if it's the last block
+	if err != nil && err != io.EOF {
 		return Block{}, fmt.Errorf("could not read block footer: %w", err)
 	}
 	return Block{
@@ -219,8 +219,8 @@ func NewFileReader(filename string) (*FileReader, error) {
 		return nil, fmt.Errorf("invalid magic number in %s", filename)
 	}
 
+	// *os.File implements io.ReadSeeker, so this works with the new decoder
 	footerDecoder := common.NewLevelDBDecoder(f)
-	// Position the decoder at the start of the footer.
 	footerDecoder.Seek(fileSize-TableFooterSize, io.SeekStart)
 
 	_, err = decodeBlockHandle(footerDecoder, 0) // Skip metaindex handle
@@ -253,22 +253,22 @@ func (fr *FileReader) GetKeyValueRecords() ([]common.KeyValueRecord, error) {
 	}
 
 	for _, indexRecord := range indexRecords {
-		// Use a bytes.Reader for the in-memory value buffer, as it implements io.ReaderAt.
+		//  bytes.NewReader implements io.ReadSeeker
 		handleDecoder := common.NewLevelDBDecoder(bytes.NewReader(indexRecord.Value))
 		blockHandle, err := decodeBlockHandle(handleDecoder, indexRecord.Offset)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to decode block handle: %v\n", err)
-			continue
+			return nil, fmt.Errorf("failed to decode block handle: %w", err)
+			// fmt.Fprintf(os.Stderr, "Warning: failed to decode block handle: %v\n", err)
 		}
 		dataBlock, err := blockHandle.Load(f)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to load data block: %v\n", err)
-			continue
+			return nil, fmt.Errorf("failed to load data block: %w", err)
+			// fmt.Fprintf(os.Stderr, "Warning: failed to load data block: %v\n", err)
 		}
 		dataRecords, err := dataBlock.GetRecords()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to get records from data block: %v\n", err)
-			continue
+			return nil, fmt.Errorf("failed to get records from data block: %w", err)
+			// fmt.Fprintf(os.Stderr, "Warning: failed to get records from data block: %v\n", err)
 		}
 		allRecords = append(allRecords, dataRecords...)
 	}

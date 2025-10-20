@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -46,10 +47,8 @@ func NewFolderReader(path string) (*FolderReader, error) {
 
 // GetRecords reads all files, sorts records by key and sequence number to determine active/recovered status.
 func (fr *FolderReader) GetRecords() ([]*LevelDBRecord, error) {
-	// A map to hold all versions of a record, keyed by the record's primary key.
 	unsortedRecords := make(map[string][]*LevelDBRecord)
 
-	// Walk the directory to find all .log and .ldb files.
 	err := filepath.WalkDir(fr.folderPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -60,13 +59,14 @@ func (fr *FolderReader) GetRecords() ([]*LevelDBRecord, error) {
 
 		ext := strings.ToLower(filepath.Ext(path))
 		var currentRecords []common.Record
+		recordSourceType := "" // To know if it came from log or ldb
 
 		switch ext {
 		case ".log":
+			recordSourceType = "LOG"
 			reader := log.NewFileReader(path)
 			parsedKeys, parseErr := reader.GetParsedInternalKeys()
 			if parseErr != nil {
-				// Log errors but continue processing other files.
 				fmt.Fprintf(os.Stderr, "Warning: could not parse log file %s: %v\n", path, parseErr)
 				return nil
 			}
@@ -74,6 +74,7 @@ func (fr *FolderReader) GetRecords() ([]*LevelDBRecord, error) {
 				currentRecords = append(currentRecords, &parsedKeys[i])
 			}
 		case ".ldb", ".sst":
+			recordSourceType = "LDB"
 			reader, parseErr := ldb.NewFileReader(path)
 			if parseErr != nil {
 				fmt.Fprintf(os.Stderr, "Warning: could not parse ldb file %s: %v\n", path, parseErr)
@@ -88,12 +89,21 @@ func (fr *FolderReader) GetRecords() ([]*LevelDBRecord, error) {
 				currentRecords = append(currentRecords, &keyValueRecords[i])
 			}
 		default:
-			// Ignore other files like MANIFEST, CURRENT, LOCK, etc.
 			return nil
+		}
+
+		fmt.Fprintf(os.Stderr, "Debug-DB: Processing %d records from %s (%s)\n", len(currentRecords), path, recordSourceType)
+		for _, rec := range currentRecords {
+			fmt.Fprintf(os.Stderr, "Debug-DB: Raw record from %s (Offset: %d, Type: %T, KeyHex: %x)\n",
+				path, rec.GetOffset(), rec, rec.GetKey())
+			if rec.GetOffset() == 264328 {
+				fmt.Fprintf(os.Stderr, "!!!!!!!! TARGET RECORD READ (DB) !!!!!!!! Path: %s, Offset: %d, Type: %T, KeyHex: %x\n", path, rec.GetOffset(), rec, rec.GetKey())
+			}
 		}
 
 		// Group records by their key.
 		for _, rec := range currentRecords {
+			// Convert key to string for map key. Handle potential non-printable bytes.
 			keyStr := string(rec.GetKey())
 			levelDBRecord := &LevelDBRecord{
 				Path:   path,
@@ -111,8 +121,11 @@ func (fr *FolderReader) GetRecords() ([]*LevelDBRecord, error) {
 
 	var allRecords []*LevelDBRecord
 	// Process each group of records that share the same key.
-	for _, recordsForKey := range unsortedRecords {
-		// Sort by sequence number, then by file offset as a tie-breaker.
+	for keyStr, recordsForKey := range unsortedRecords {
+
+		keyJSON, _ := json.Marshal(keyStr) // Escape the key string for logging
+		fmt.Fprintf(os.Stderr, "Debug-DB: Grouping %d records for key: %s\n", len(recordsForKey), string(keyJSON))
+
 		sort.Slice(recordsForKey, func(i, j int) bool {
 			if recordsForKey[i].Record.GetSequenceNumber() != recordsForKey[j].Record.GetSequenceNumber() {
 				return recordsForKey[i].Record.GetSequenceNumber() < recordsForKey[j].Record.GetSequenceNumber()
@@ -120,8 +133,6 @@ func (fr *FolderReader) GetRecords() ([]*LevelDBRecord, error) {
 			return recordsForKey[i].Record.GetOffset() < recordsForKey[j].Record.GetOffset()
 		})
 
-		// The last record in the sorted list is the most recent (active) version.
-		// All previous versions are considered "recovered".
 		numRecords := len(recordsForKey)
 		for i, rec := range recordsForKey {
 			if i == numRecords-1 {
@@ -133,9 +144,16 @@ func (fr *FolderReader) GetRecords() ([]*LevelDBRecord, error) {
 		}
 	}
 
-	// Final sort of all records for a consistent and chronological output order.
 	sort.Slice(allRecords, func(i, j int) bool {
-		return allRecords[i].Record.GetSequenceNumber() < allRecords[j].Record.GetSequenceNumber()
+		// Ensure consistent final sort order
+		if allRecords[i].Record.GetSequenceNumber() != allRecords[j].Record.GetSequenceNumber() {
+			return allRecords[i].Record.GetSequenceNumber() < allRecords[j].Record.GetSequenceNumber()
+		}
+		if allRecords[i].Record.GetOffset() != allRecords[j].Record.GetOffset() {
+			return allRecords[i].Record.GetOffset() < allRecords[j].Record.GetOffset()
+		}
+		// Tie-break by path if sequence and offset are identical (unlikely but possible)
+		return allRecords[i].Path < allRecords[j].Path
 	})
 
 	return allRecords, nil
