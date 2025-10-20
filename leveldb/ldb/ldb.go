@@ -77,7 +77,7 @@ func (b *Block) GetRecords() ([]common.KeyValueRecord, error) {
 	}
 
 	restartsOffset := len(buffer) - trailerSize
-	// CORRECTED: bytes.NewReader implements io.ReadSeeker, which our new decoder needs.
+	// bytes.NewReader implements io.ReadSeeker, which our new decoder needs.
 	decoder := common.NewLevelDBDecoder(bytes.NewReader(buffer[:restartsOffset]))
 	var records []common.KeyValueRecord
 	var sharedKey []byte
@@ -102,7 +102,7 @@ func (b *Block) GetRecords() ([]common.KeyValueRecord, error) {
 }
 
 func decodeKeyValueRecord(decoder *common.LevelDBDecoder, blockOffset int64, sharedKey []byte) (common.KeyValueRecord, []byte, error) {
-	// CORRECTED: Replaced DecodeUint32Varint with the new DecodeVarint
+	// Replaced DecodeUint32Varint with the new DecodeVarint
 	offset, sharedBytes, err := decoder.DecodeVarint()
 	if err != nil {
 		return common.KeyValueRecord{}, nil, err
@@ -154,7 +154,7 @@ type BlockHandle struct {
 }
 
 func decodeBlockHandle(decoder *common.LevelDBDecoder, baseOffset int64) (BlockHandle, error) {
-	// CORRECTED: Replaced DecodeUint64Varint with the new DecodeVarint
+	//  Replaced DecodeUint64Varint with the new DecodeVarint
 	offset, blockOffset, err := decoder.DecodeVarint()
 	if err != nil {
 		return BlockHandle{}, err
@@ -221,7 +221,7 @@ func NewFileReader(filename string) (*FileReader, error) {
 		return nil, fmt.Errorf("invalid magic number in %s", filename)
 	}
 
-	// CORRECTED: *os.File implements io.ReadSeeker, so this works with the new decoder
+	// *os.File implements io.ReadSeeker, so this works with the new decoder
 	footerDecoder := common.NewLevelDBDecoder(f)
 	footerDecoder.Seek(fileSize-TableFooterSize, io.SeekStart)
 
@@ -255,7 +255,7 @@ func (fr *FileReader) GetKeyValueRecords() ([]common.KeyValueRecord, error) {
 	}
 
 	for _, indexRecord := range indexRecords {
-		// CORRECTED: bytes.NewReader implements io.ReadSeeker
+		//  bytes.NewReader implements io.ReadSeeker
 		handleDecoder := common.NewLevelDBDecoder(bytes.NewReader(indexRecord.Value))
 		blockHandle, err := decodeBlockHandle(handleDecoder, indexRecord.Offset)
 		if err != nil {

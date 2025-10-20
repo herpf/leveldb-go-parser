@@ -206,8 +206,6 @@ func decodeWriteBatch(data []byte, contentsBaseOffset int64) (*WriteBatch, error
 
 		records = append(records, newRecord)
 
-		// *** MODIFICATION END ***
-
 	}
 
 	if recovered {
@@ -321,7 +319,6 @@ func (fr *FileReader) getWriteBatches() ([]*WriteBatch, error) {
 			fmt.Fprintf(os.Stderr, "TRACE-LOG: Assigned buffer (len=%d) and firstRecordOffset=%d for index %d\n", len(buffer), firstRecordOffset, i)
 			fmt.Fprintf(os.Stderr, "Debug-LOG: Started multi-part batch at offset %d\n", firstRecordOffset)
 		case TypeMiddle:
-			// Unchanged, but add check for buffer == nil (already has warning)
 			fmt.Fprintf(os.Stderr, "TRACE-LOG: Entered TypeMiddle case for index %d, file %s, offset %d\n", i, fr.filename, rec.ContentsOffset)
 			if buffer != nil {
 				buffer = append(buffer, rec.Contents...)
@@ -330,7 +327,6 @@ func (fr *FileReader) getWriteBatches() ([]*WriteBatch, error) {
 				fmt.Fprintf(os.Stderr, "Warning-LOG: Found middle block without a preceding first block near offset %d\n", rec.ContentsOffset)
 			}
 		case TypeLast:
-			// Unchanged
 			fmt.Fprintf(os.Stderr, "TRACE-LOG: Entered TypeLast case for index %d, file %s, offset %d\n", i, fr.filename, rec.ContentsOffset)
 			if buffer != nil {
 				buffer = append(buffer, rec.Contents...)

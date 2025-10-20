@@ -110,7 +110,6 @@ const (
 	IDBKeyBinary IDBKeyType = 6
 )
 
-// Other constants from Python definitions
 const (
 	RequiresProcessingSSVPseudoVersion = 0x11
 	ReplaceWithBlob                    = 0x01
