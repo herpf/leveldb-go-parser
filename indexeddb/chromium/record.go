@@ -88,7 +88,6 @@ func DecodeKeyPrefix(decoder *common.LevelDBDecoder) (*KeyPrefix, error) {
 	}, nil
 }
 
-
 // ObjectStoreDataKey represents data stored in an object store.
 type ObjectStoreDataKey struct {
 	BaseKey
@@ -152,7 +151,7 @@ func decodeIDBKey(decoder *common.LevelDBDecoder) (IDBKey, error) {
 	case IDBKeyNull, IDBKeyMinKey:
 		value = nil
 	case IDBKeyString:
-		// CORRECTED: Use the new BIG ENDIAN UTF16 decoder for keys
+		// Use the new BIG ENDIAN UTF16 decoder for keys
 		_, val, err := decoder.DecodeUTF16StringWithLengthBigEndian()
 		if err != nil {
 			return IDBKey{}, err

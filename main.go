@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"leveldb-parser-go/config"
 	"leveldb-parser-go/indexeddb"
 	"leveldb-parser-go/leveldb/common"
 	"leveldb-parser-go/leveldb/db"
@@ -18,7 +19,8 @@ import (
 )
 
 var (
-	app = kingpin.New("leveldb-parser-go", "A Go tool for forensic analysis of LevelDB files.")
+	app       = kingpin.New("leveldb-parser-go", "A Go tool for forensic analysis of LevelDB files.")
+	isVerbose = app.Flag("verbose", "Enable verbose debug logging.").Short('v').Bool()
 
 	// DB command
 	dbCmd        = app.Command("db", "Parse a LevelDB directory.")
@@ -46,14 +48,20 @@ var (
 
 func main() {
 	debug.SetTraceback("crash") // Enables full stack trace on panic
-	switch kingpin.MustParse(app.Parse(os.Args[1:])) {
+	parsedCommand := kingpin.MustParse(app.Parse(os.Args[1:]))
+	config.InitLogger(*isVerbose)
+	config.VerboseLogger.Println("Logger initialized.")
+	switch parsedCommand {
 	case dbCmd.FullCommand():
+		config.VerboseLogger.Println("Running db command...")
 		runDbCommand(*dbPath, *dbFormat, *dbOutputFile)
 	case ldbCmd.FullCommand():
+		config.VerboseLogger.Println("Running ldb command...")
 		runLdbCommand(*ldbPath, *ldbFormat, *ldbOutputFile)
 	case logCmd.FullCommand():
 		runLogCommand(*logPath, *logFormat, *logOutputFile)
 	case indexedDbCmd.FullCommand():
+		config.VerboseLogger.Println("Running indexeddb command...")
 		runIndexedDBCommand(*indexedDbPath, *indexedDbFormat, *indexedDbOutputFile)
 	}
 }
@@ -67,16 +75,16 @@ func getOutputWriter(outputFile string) (io.WriteCloser, error) {
 }
 
 func runIndexedDBCommand(path, format, outputFile string) {
-	fmt.Fprintf(os.Stderr, "🔎 Parsing IndexedDB directory: %s\n", path)
+	config.VerboseLogger.Printf("🔎 Parsing IndexedDB directory: %s", path)
 	reader, err := indexeddb.NewFolderReader(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating IndexedDB folder reader: %v\n", err)
+		config.VerboseLogger.Printf("Error creating IndexedDB folder reader: %v", err)
 		os.Exit(1)
 	}
 
 	records, err := reader.GetRecords()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting IndexedDB records: %v\n", err)
+		config.VerboseLogger.Printf("Error getting IndexedDB records: %v", err)
 		os.Exit(1)
 	}
 
@@ -92,7 +100,7 @@ func runIndexedDBCommand(path, format, outputFile string) {
 
 	writer, err := getOutputWriter(outputFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)
+		config.VerboseLogger.Printf("Error creating output file: %v", err)
 		os.Exit(1)
 	}
 	defer writer.Close()
@@ -101,7 +109,7 @@ func runIndexedDBCommand(path, format, outputFile string) {
 		for _, rec := range records {
 			line, err := json.Marshal(rec)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error marshalling record to JSONL: %v\n", err)
+				config.VerboseLogger.Printf("Error marshalling record to JSONL: %v", err)
 				continue
 			}
 			fmt.Fprintln(writer, string(line))
@@ -110,26 +118,26 @@ func runIndexedDBCommand(path, format, outputFile string) {
 		encoder := json.NewEncoder(writer)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(records); err != nil {
-			fmt.Fprintf(os.Stderr, "Error encoding JSON: %v\n", err)
+			config.VerboseLogger.Printf("Error encoding JSON: %v", err)
 		}
 	}
 
 	if outputFile != "" {
-		fmt.Fprintf(os.Stderr, "✅ Output successfully saved to %s\n", outputFile)
+		config.VerboseLogger.Printf("✅ Output successfully saved to %s", outputFile)
 	}
 }
 
 func runDbCommand(path, format, outputFile string) {
-	fmt.Fprintf(os.Stderr, "🔎 Parsing LevelDB directory: %s\n", path)
+	config.VerboseLogger.Printf("🔎 Parsing LevelDB directory: %s", path)
 	reader, err := db.NewFolderReader(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating folder reader: %v\n", err)
+		config.VerboseLogger.Printf("Error creating folder reader: %v", err)
 		os.Exit(1)
 	}
 
 	records, err := reader.GetRecords()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		config.VerboseLogger.Printf("Error: %v", err)
 		os.Exit(1)
 	}
 
@@ -142,7 +150,7 @@ func runDbCommand(path, format, outputFile string) {
 
 	writer, err := getOutputWriter(outputFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)
+		config.VerboseLogger.Printf("Error creating output file: %v", err)
 		os.Exit(1)
 	}
 	defer writer.Close()
@@ -169,7 +177,7 @@ func runDbCommand(path, format, outputFile string) {
 				"record_type":     v.RecordType,
 			}
 		default:
-			fmt.Fprintf(os.Stderr, "Warning: unknown record type %T\n", v)
+			config.VerboseLogger.Printf("Warning: unknown record type %T", v)
 			continue
 		}
 
@@ -185,7 +193,7 @@ func runDbCommand(path, format, outputFile string) {
 		for _, rec := range outputRecords {
 			line, err := json.Marshal(rec)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error marshalling record to JSONL: %v\n", err)
+				config.VerboseLogger.Printf("Error marshalling record to JSONL: %v", err)
 				continue
 			}
 			fmt.Fprintln(writer, string(line))
@@ -194,25 +202,25 @@ func runDbCommand(path, format, outputFile string) {
 		encoder := json.NewEncoder(writer)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(outputRecords); err != nil {
-			fmt.Fprintf(os.Stderr, "Error encoding JSON: %v\n", err)
+			config.VerboseLogger.Printf("Error encoding JSON: %v", err)
 		}
 	}
 
 	if outputFile != "" {
-		fmt.Fprintf(os.Stderr, "✅ Output successfully saved to %s\n", outputFile)
+		config.VerboseLogger.Printf("✅ Output successfully saved to %s", outputFile)
 	}
 }
 
 func runLdbCommand(path, format, outputFile string) {
-	fmt.Fprintf(os.Stderr, "🔎 Parsing LDB file: %s\n", path)
+	config.VerboseLogger.Printf("🔎 Parsing LDB file: %s", path)
 	reader, err := ldb.NewFileReader(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		config.VerboseLogger.Printf("Error: %v", err)
 		os.Exit(1)
 	}
 	records, err := reader.GetKeyValueRecords()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing LDB records: %v\n", err)
+		config.VerboseLogger.Printf("Error parsing LDB records: %v", err)
 		os.Exit(1)
 	}
 
@@ -223,7 +231,7 @@ func runLdbCommand(path, format, outputFile string) {
 
 	writer, err := getOutputWriter(outputFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)
+		config.VerboseLogger.Printf("Error creating output file: %v", err)
 		os.Exit(1)
 	}
 	defer writer.Close()
@@ -237,16 +245,16 @@ func runLdbCommand(path, format, outputFile string) {
 	}
 
 	if outputFile != "" {
-		fmt.Fprintf(os.Stderr, "✅ Output successfully saved to %s\n", outputFile)
+		config.VerboseLogger.Printf("✅ Output successfully saved to %s", outputFile)
 	}
 }
 
 func runLogCommand(path, format, outputFile string) {
-	fmt.Fprintf(os.Stderr, "🔎 Parsing LOG file: %s\n", path)
+	config.VerboseLogger.Printf("🔎 Parsing LOG file: %s", path)
 	reader := log.NewFileReader(path)
 	records, err := reader.GetParsedInternalKeys()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing LOG records: %v\n", err)
+		config.VerboseLogger.Printf("Error parsing LOG records: %v", err)
 		os.Exit(1)
 	}
 
@@ -257,7 +265,7 @@ func runLogCommand(path, format, outputFile string) {
 
 	writer, err := getOutputWriter(outputFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)
+		config.VerboseLogger.Printf("Error creating output file: %v", err)
 		os.Exit(1)
 	}
 	defer writer.Close()
@@ -271,7 +279,7 @@ func runLogCommand(path, format, outputFile string) {
 	}
 
 	if outputFile != "" {
-		fmt.Fprintf(os.Stderr, "✅ Output successfully saved to %s\n", outputFile)
+		config.VerboseLogger.Printf("✅ Output successfully saved to %s", outputFile)
 	}
 }
 
@@ -298,7 +306,7 @@ func printRecordsJSON(records []common.Record, pathForFiles string, writer io.Wr
 				"record_type":     v.RecordType,
 			}
 		default:
-			fmt.Fprintf(os.Stderr, "Warning: unknown record type in printRecordsJSON: %T\n", v)
+			config.VerboseLogger.Printf("Warning: unknown record type in printRecordsJSON: %T", v)
 			continue
 		}
 
@@ -311,7 +319,7 @@ func printRecordsJSON(records []common.Record, pathForFiles string, writer io.Wr
 	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(outputRecords); err != nil {
-		fmt.Fprintf(os.Stderr, "Error encoding JSON: %v\n", err)
+		config.VerboseLogger.Printf("Error encoding JSON: %v", err)
 	}
 }
 
@@ -337,7 +345,7 @@ func printRecordJSONL(rec common.Record, pathForFile string, writer io.Writer) {
 			"record_type":     v.RecordType,
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "Warning: unknown record type in printRecordJSONL: %T\n", v)
+		config.VerboseLogger.Printf("Warning: unknown record type in printRecordJSONL: %T", v)
 		return
 	}
 
@@ -347,7 +355,7 @@ func printRecordJSONL(rec common.Record, pathForFile string, writer io.Writer) {
 
 	line, err := json.Marshal(m)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error marshalling final record to JSONL: %v\n", err)
+		config.VerboseLogger.Printf("Error marshalling final record to JSONL: %v", err)
 		return
 	}
 	fmt.Fprintln(writer, string(line))
