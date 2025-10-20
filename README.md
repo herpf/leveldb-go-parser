@@ -12,7 +12,7 @@ In any case, please let me know if you have any comments, or suggestions.
 
 # Usage for LevelDB
 ./leveldb-parser-go db --format jsonl /path/to/leveldb --output-file testoutput.jsonl
-# Usage for IndexedDB
+# Usage for IndexedDB (Only Chromium)
 ./leveldb-parser-go indexeddb "/path/to/indexedDB/folder.indexeddb.leveldb" --format jsonl -o output.jsonl
 
 # Acknowledgements
