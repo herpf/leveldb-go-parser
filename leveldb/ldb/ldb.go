@@ -102,7 +102,6 @@ func (b *Block) GetRecords() ([]common.KeyValueRecord, error) {
 }
 
 func decodeKeyValueRecord(decoder *common.LevelDBDecoder, blockOffset int64, sharedKey []byte) (common.KeyValueRecord, []byte, error) {
-	// Replaced DecodeUint32Varint with the new DecodeVarint
 	offset, sharedBytes, err := decoder.DecodeVarint()
 	if err != nil {
 		return common.KeyValueRecord{}, nil, err
@@ -154,7 +153,6 @@ type BlockHandle struct {
 }
 
 func decodeBlockHandle(decoder *common.LevelDBDecoder, baseOffset int64) (BlockHandle, error) {
-	//  Replaced DecodeUint64Varint with the new DecodeVarint
 	offset, blockOffset, err := decoder.DecodeVarint()
 	if err != nil {
 		return BlockHandle{}, err
