@@ -88,7 +88,6 @@ func DecodeKeyPrefix(decoder *common.LevelDBDecoder) (*KeyPrefix, error) {
 	}, nil
 }
 
-// --- Specific Key Types ---
 
 // ObjectStoreDataKey represents data stored in an object store.
 type ObjectStoreDataKey struct {
@@ -153,7 +152,6 @@ func decodeIDBKey(decoder *common.LevelDBDecoder) (IDBKey, error) {
 	case IDBKeyNull, IDBKeyMinKey:
 		value = nil
 	case IDBKeyString:
-		// *** THIS IS THE FIX ***
 		// CORRECTED: Use the new BIG ENDIAN UTF16 decoder for keys
 		_, val, err := decoder.DecodeUTF16StringWithLengthBigEndian()
 		if err != nil {
@@ -258,13 +256,11 @@ func ParseKey(keyBytes []byte) (IndexedDBKey, error) {
 	// Cases requiring user key parsing
 	case ObjectStoreData, BlobEntry, ExistsEntry, IndexData:
 		userKey, err := decodeIDBKey(decoder)
-		// --- THIS IS THE KEY CHANGE ---
 		// If decodeIDBKey fails FOR ANY REASON (EOF, bad type, etc.),
 		// return the error directly.
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode user key for type %v: %w", keyType, err)
 		}
-		// -----------------------------
 
 		// Successfully parsed user key
 		switch keyType {

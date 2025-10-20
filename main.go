@@ -46,7 +46,6 @@ var (
 
 func main() {
 	debug.SetTraceback("crash") // Enables full stack trace on panic
-	// Determine which command was parsed
 	switch kingpin.MustParse(app.Parse(os.Args[1:])) {
 	case dbCmd.FullCommand():
 		runDbCommand(*dbPath, *dbFormat, *dbOutputFile)
@@ -134,7 +133,6 @@ func runDbCommand(path, format, outputFile string) {
 		os.Exit(1)
 	}
 
-	// Sort records for consistent output by accessing the nested Record field.
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].Record.GetSequenceNumber() != records[j].Record.GetSequenceNumber() {
 			return records[i].Record.GetSequenceNumber() < records[j].Record.GetSequenceNumber()
@@ -149,12 +147,10 @@ func runDbCommand(path, format, outputFile string) {
 	}
 	defer writer.Close()
 
-	// Convert the slice of LevelDBRecord structs to a slice of maps for consistent marshalling.
 	outputRecords := make([]map[string]interface{}, 0, len(records))
 	for _, rec := range records {
 		var recordAsMap map[string]interface{}
 
-		// Use a type switch to manually build the map for each concrete type.
 		switch v := rec.Record.(type) {
 		case *common.KeyValueRecord:
 			recordAsMap = map[string]interface{}{
@@ -195,7 +191,6 @@ func runDbCommand(path, format, outputFile string) {
 			fmt.Fprintln(writer, string(line))
 		}
 	} else {
-		// For 'json' format, encode the entire slice as a pretty-printed array.
 		encoder := json.NewEncoder(writer)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(outputRecords); err != nil {
@@ -285,7 +280,6 @@ func printRecordsJSON(records []common.Record, pathForFiles string, writer io.Wr
 	var outputRecords []map[string]interface{}
 	for _, rec := range records {
 		var m map[string]interface{}
-		// Use a type switch to manually build the map for each concrete type.
 		switch v := rec.(type) {
 		case *common.KeyValueRecord:
 			m = map[string]interface{}{

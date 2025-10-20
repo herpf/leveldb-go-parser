@@ -92,18 +92,14 @@ func (fr *FolderReader) GetRecords() ([]*LevelDBRecord, error) {
 			return nil
 		}
 
-		// --- NEW LOGGING: Log raw keys as read ---
 		fmt.Fprintf(os.Stderr, "Debug-DB: Processing %d records from %s (%s)\n", len(currentRecords), path, recordSourceType)
 		for _, rec := range currentRecords {
 			fmt.Fprintf(os.Stderr, "Debug-DB: Raw record from %s (Offset: %d, Type: %T, KeyHex: %x)\n",
 				path, rec.GetOffset(), rec, rec.GetKey())
-			// *** ADD THIS BLOCK ***
 			if rec.GetOffset() == 264328 {
 				fmt.Fprintf(os.Stderr, "!!!!!!!! TARGET RECORD READ (DB) !!!!!!!! Path: %s, Offset: %d, Type: %T, KeyHex: %x\n", path, rec.GetOffset(), rec, rec.GetKey())
 			}
-			// *** END OF BLOCK ***
 		}
-		// ------------------------------------------
 
 		// Group records by their key.
 		for _, rec := range currentRecords {
@@ -127,10 +123,8 @@ func (fr *FolderReader) GetRecords() ([]*LevelDBRecord, error) {
 	// Process each group of records that share the same key.
 	for keyStr, recordsForKey := range unsortedRecords {
 
-		// --- NEW LOGGING: Log keys being grouped ---
 		keyJSON, _ := json.Marshal(keyStr) // Escape the key string for logging
 		fmt.Fprintf(os.Stderr, "Debug-DB: Grouping %d records for key: %s\n", len(recordsForKey), string(keyJSON))
-		// ------------------------------------------
 
 		sort.Slice(recordsForKey, func(i, j int) bool {
 			if recordsForKey[i].Record.GetSequenceNumber() != recordsForKey[j].Record.GetSequenceNumber() {

@@ -13,8 +13,9 @@ import (
 )
 
 const maxAllocBytes = 1 << 20
+const maxArrayLen = 1 << 20
+const maxProps = 1 << 20
 
-// JSArray represents a JavaScript array with values and properties.
 type JSArray struct {
 	Values     []any          `json:"values,omitempty"`
 	Properties map[string]any `json:"properties,omitempty"`
@@ -33,7 +34,6 @@ type BlobReference struct {
 	BlobIndex uint64 `json:"blob_index"`
 }
 
-// *** NEW: ArrayBufferView struct ***
 // This type is needed to represent the ArrayBufferView
 type ArrayBufferView struct {
 	Buffer []byte `json:"buffer"`
@@ -43,7 +43,6 @@ type ArrayBufferView struct {
 	Flags  uint64 `json:"flags"`
 }
 
-// --- NEW: V8 Deserializer ---
 // V8Deserializer is a stateful parser for the V8 serialization format.
 type V8Deserializer struct {
 	decoder  *common.LevelDBDecoder
@@ -148,7 +147,6 @@ func (d *V8Deserializer) ReadObject() (any, error) {
 	return value, nil
 }
 
-// *** NEW Function: ReadJSArrayBufferView ***
 func (d *V8Deserializer) ReadJSArrayBufferView(buffer []byte) (*ArrayBufferView, error) {
 	// Corresponds to _ReadJSArrayBufferView in v8.py
 	_, tag, err := d.decoder.DecodeUint8() // This is the sub-type tag (e.g., 'C' for Uint8Array)
@@ -194,7 +192,6 @@ func (d *V8Deserializer) ReadJSArrayBufferView(buffer []byte) (*ArrayBufferView,
 	}, nil
 }
 
-// *** NEW Function: ReadObjectInternal (was ReadValue) ***
 // This contains the main switch statement.
 func (d *V8Deserializer) ReadObjectInternal() (any, error) {
 	d.depth++
@@ -211,7 +208,6 @@ func (d *V8Deserializer) ReadObjectInternal() (any, error) {
 	}
 	switch tag {
 	// no padding case, since skipped
-	// for example, for V8ObjectReference:
 	case V8ObjectReference:
 		_, id, err := d.decoder.DecodeVarint()
 		if err != nil {
@@ -243,12 +239,24 @@ func (d *V8Deserializer) ReadObjectInternal() (any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to read one-byte string length: %w", err)
 		}
+		if length > maxAllocBytes {
+			d.decoder.Seek(int64(length), io.SeekCurrent)
+			return "<string_too_large: skipped>", nil
+		}
 		_, data, err := d.decoder.ReadBytes(int(length))
 		if err != nil {
 			return nil, fmt.Errorf("failed to read one-byte string data: %w", err)
 		}
 		return string(data), nil
 	case V8TwoByteString:
+		_, length, err := d.decoder.DecodeVarint()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read two-byte string length: %w", err)
+		}
+		if length > maxAllocBytes {
+			d.decoder.Seek(int64(length), io.SeekCurrent)
+			return "<string_too_large: skipped>", nil
+		}
 		_, str, err := d.decoder.DecodeUTF16StringWithLength()
 		return str, err
 	case V8BeginDenseJSArray:
@@ -392,8 +400,6 @@ func (d *V8Deserializer) ReadJSObject() (map[string]any, error) {
 	return jsObject, nil
 }
 
-// --- End of V8 Deserializer ---
-
 type BlinkDeserializer struct {
 	decoder       *common.LevelDBDecoder
 	version       int
@@ -533,28 +539,20 @@ func (bd *BlinkDeserializer) ReadHostObject(d *V8Deserializer) (any, error) {
 
 // Modify parseBlink slightly to handle the error return from parseBlink
 func parseBlink(data []byte, version int) (any, error) {
-	// --- NEW LOGGING: Show raw data entering parseBlink ---
 	fmt.Fprintf(os.Stderr, "Debug: parseBlink received data (hex): %x\n", data)
-	// ------------------------------------------------------
 	if len(data) == 0 {
 		return &ObjectStoreDataValue{Version: version}, nil
 	}
 	bd := NewBlinkDeserializer(data)
 	value, err := bd.Deserialize()
 	if err != nil {
-		// --- NEW LOGGING: Show result on value error ---
-		//fmt.Fprintf(os.Stderr, "Debug: parseBlink result (value error): %v\n", err)
-		// -----------------------------------------------
 		// Return error instead of nil, allows caller to log raw value
 		return nil, fmt.Errorf("failed to deserialize V8 value: %w", err)
 	}
 	if ref, ok := value.(*v8ReferenceWrapper); ok {
 		value = ref.Value
 	}
-	//fmt.Fprintf(os.Stderr, "Debug: parseBlink result (success): %+v\n", value)
 	fmt.Fprintf(os.Stderr, "Debug: parseBlink result (success): type %T\n", value) // Safer alternative
-	// -------------------------------------------
-	// *** NEW: Handle ArrayBufferView by converting to string for display ***
 	// This helps make byte data searchable
 	if view, ok := value.(*ArrayBufferView); ok {
 		// Attempt to convert to string. This is good for forensics.
@@ -586,7 +584,6 @@ func ParseObjectStoreDataValue(valueBytes []byte) (any, error) {
 	peek, err := decoder.PeekBytes(3)
 	if err == nil {
 		if bytes.Equal(peek, []byte{byte(BlinkVersionTag), RequiresProcessingSSVPseudoVersion, ReplaceWithBlob}) {
-			// ... blob reference logic remains the same ...
 			decoder.ReadBytes(3)
 			_, blobSize, _ := decoder.DecodeVarint()
 			_, blobIndex, _ := decoder.DecodeVarint()
@@ -609,7 +606,6 @@ func ParseObjectStoreDataValue(valueBytes []byte) (any, error) {
 			// Call parseBlink and handle potential error
 			result, err := parseBlink(decompressed, int(version))
 			if err != nil {
-				// *** MODIFIED: Include raw hex on error ***
 				return nil, fmt.Errorf("parseBlink failed after snappy: %w, raw_decompressed_hex: %x", err, decompressed)
 			}
 			return result, nil
@@ -619,7 +615,6 @@ func ParseObjectStoreDataValue(valueBytes []byte) (any, error) {
 	// Call parseBlink and handle potential error
 	result, err := parseBlink(remainingBytes, int(version))
 	if err != nil {
-		// *** MODIFIED: Include raw hex on error ***
 		return nil, fmt.Errorf("parseBlink failed: %w, raw_hex: %x", err, remainingBytes)
 	}
 	return result, nil
@@ -665,6 +660,9 @@ func (d *V8Deserializer) ReadJSObjectProperties(js map[string]any, endTag V8Seri
 		}
 		js[keyStr] = valueObj
 		num++
+		if num > maxProps {
+			return num, fmt.Errorf("too many properties: %d", num)
+		}
 	}
 	return num, nil
 }
@@ -674,6 +672,9 @@ func (d *V8Deserializer) ReadDenseJSArray() (any, error) {
 	_, length, err := d.decoder.DecodeVarint()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read dense array length: %w", err)
+	}
+	if length > maxArrayLen {
+		return nil, fmt.Errorf("dense array length too large: %d", length)
 	}
 	arr := &JSArray{Values: make([]any, length), Properties: make(map[string]any)}
 	for i := 0; i < int(length); i++ {
@@ -723,6 +724,9 @@ func (d *V8Deserializer) ReadSparseJSArray() (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if length > maxArrayLen {
+		return nil, fmt.Errorf("sparse array length too large: %d", length)
+	}
 	arr := &JSArray{Values: make([]any, length), Properties: make(map[string]any)}
 	for i := range arr.Values {
 		arr.Values[i] = nil // or "undefined"
@@ -749,6 +753,7 @@ func (d *V8Deserializer) ReadSparseJSArray() (any, error) {
 // ReadJSMap implementation
 func (d *V8Deserializer) ReadJSMap() (any, error) {
 	entries := make([]JSMapEntry, 0)
+	count := 0
 	for {
 		peeked, err := d.decoder.PeekBytes(1)
 		if err != nil {
@@ -767,6 +772,10 @@ func (d *V8Deserializer) ReadJSMap() (any, error) {
 			return nil, err
 		}
 		entries = append(entries, JSMapEntry{key, value})
+		count++
+		if count > maxArrayLen {
+			return nil, fmt.Errorf("JSMap too large: exceeded %d entries", maxArrayLen)
+		}
 	}
 	_, expected, err := d.decoder.DecodeVarint()
 	if err != nil {
@@ -784,6 +793,7 @@ type JSMapEntry [2]any
 // ReadJSSet implementation
 func (d *V8Deserializer) ReadJSSet() (any, error) {
 	jsSet := make([]any, 0)
+	count := 0
 	for {
 		peeked, err := d.decoder.PeekBytes(1)
 		if err != nil {
@@ -801,6 +811,10 @@ func (d *V8Deserializer) ReadJSSet() (any, error) {
 			elem = ref.Value
 		}
 		jsSet = append(jsSet, elem)
+		count++
+		if count > maxArrayLen {
+			return nil, fmt.Errorf("JSSet too large: exceeded %d elements", maxArrayLen)
+		}
 	}
 	_, expected, err := d.decoder.DecodeVarint()
 	if err != nil {
@@ -897,6 +911,9 @@ func (d *V8Deserializer) ReadJSArrayBuffer(isShared, isResizable bool) (any, err
 	}
 	var data []byte
 	if byteLength > 0 {
+		if byteLength > maxAllocBytes {
+			return nil, fmt.Errorf("array buffer too large: %d", byteLength)
+		}
 		_, data, err = d.decoder.ReadBytes(int(byteLength))
 		if err != nil {
 			return nil, err

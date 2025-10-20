@@ -251,7 +251,6 @@ func (fr *FileReader) GetKeyValueRecords() ([]common.KeyValueRecord, error) {
 
 	indexRecords, err := fr.indexBlock.GetRecords()
 	if err != nil {
-		// This error was already propagating, which is good.
 		return nil, fmt.Errorf("failed to get records from index block: %w", err)
 	}
 
@@ -260,24 +259,18 @@ func (fr *FileReader) GetKeyValueRecords() ([]common.KeyValueRecord, error) {
 		handleDecoder := common.NewLevelDBDecoder(bytes.NewReader(indexRecord.Value))
 		blockHandle, err := decodeBlockHandle(handleDecoder, indexRecord.Offset)
 		if err != nil {
-			// *** MODIFIED: Propagate this error ***
 			return nil, fmt.Errorf("failed to decode block handle: %w", err)
 			// fmt.Fprintf(os.Stderr, "Warning: failed to decode block handle: %v\n", err)
-			// continue
 		}
 		dataBlock, err := blockHandle.Load(f)
 		if err != nil {
-			// *** MODIFIED: Propagate this error ***
 			return nil, fmt.Errorf("failed to load data block: %w", err)
 			// fmt.Fprintf(os.Stderr, "Warning: failed to load data block: %v\n", err)
-			// continue
 		}
 		dataRecords, err := dataBlock.GetRecords()
 		if err != nil {
-			// *** MODIFIED: Propagate this error ***
 			return nil, fmt.Errorf("failed to get records from data block: %w", err)
 			// fmt.Fprintf(os.Stderr, "Warning: failed to get records from data block: %v\n", err)
-			// continue
 		}
 		allRecords = append(allRecords, dataRecords...)
 	}

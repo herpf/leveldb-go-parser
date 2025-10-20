@@ -76,15 +76,6 @@ func decodePhysicalRecord(decoder *common.LevelDBDecoder, baseOffset int64) (*Ph
 	computed := crc32.Checksum(append([]byte{recordTypeByte}, contents...), table)
 	expected := unmask(checksum)
 
-	/* if computed != expected {
-		if isPartial {
-			fmt.Fprintf(os.Stderr, "Partial-Recovery-LOG: Ignoring checksum mismatch for partial record at offset %d (computed %x, expected %x)\n", baseOffset+offset, computed, expected)
-			recovered = true
-		} else {
-			fmt.Fprintf(os.Stderr, "Warning-LOG: Checksum mismatch in physical record at offset %d (computed %x, expected %x). Skipping.\n", baseOffset+offset, computed, expected)
-			return nil, fmt.Errorf("checksum mismatch")
-		}
-	} */
 	if computed != expected {
 		fmt.Fprintf(os.Stderr, "Checksum-Ignore-LOG: Ignoring mismatch at offset %d (computed %x, expected %x). Recovering.\n", baseOffset+offset, computed, expected)
 		recovered = true
@@ -112,17 +103,16 @@ func decodePhysicalRecord(decoder *common.LevelDBDecoder, baseOffset int64) (*Ph
 
 	return &PhysicalRecord{
 		BaseOffset:     baseOffset,
-		Offset:         offset + baseOffset, // *** MODIFIED: Make absolute ***
+		Offset:         offset + baseOffset,
 		Checksum:       checksum,
 		Length:         length,
 		RecordType:     recordTypeByte,
 		Contents:       contents,
-		ContentsOffset: contentsOffset + baseOffset, // *** MODIFIED: Make absolute ***
+		ContentsOffset: contentsOffset + baseOffset,
 		Recovered:      recovered,
 	}, nil
 }
 
-// Added: Helper functions for LevelDB's CRC masking
 func mask(crc uint32) uint32 {
 	return ((crc >> 15) | (crc << 17)) + 0xa282ead8
 }
@@ -202,7 +192,6 @@ func decodeWriteBatch(data []byte, contentsBaseOffset int64) (*WriteBatch, error
 
 		fmt.Fprintf(os.Stderr, "Debug-LOG: Decoded InternalKey %d/%d: AbsOffset=%d, Type=%d, KeyHex=%x\n", i+1, count, absoluteKeyOffset, recordType, key)
 
-		// 1. Create the record in a variable first
 		newRecord := common.ParsedInternalKey{
 			Offset:         absoluteKeyOffset, // This is now the absolute file offset
 			RecordType:     recordType,
@@ -211,25 +200,14 @@ func decodeWriteBatch(data []byte, contentsBaseOffset int64) (*WriteBatch, error
 			SequenceNumber: sequenceNumber + uint64(i),
 		}
 
-		// 2. Add the specific check (Note: fr.filename is not available here, so I've removed it)
 		if newRecord.Offset == 264328 {
 			fmt.Fprintf(os.Stderr, "!!!!!!!! TARGET RECORD FOUND (LOG) !!!!!!!! Offset: %d, KeyHex: %x, ValueLen: %d\n", newRecord.Offset, newRecord.Key, len(newRecord.Value))
 		}
 
-		// 3. Now append the variable
 		records = append(records, newRecord)
 
 		// *** MODIFICATION END ***
 
-		/* This is your old code, which you are replacing with the block above
-		records = append(records, common.ParsedInternalKey{
-			Offset:         absoluteKeyOffset, // This is now the absolute file offset
-			RecordType:     recordType,
-			Key:            key,
-			Value:          value,
-			SequenceNumber: sequenceNumber + uint64(i),
-		})
-		*/
 	}
 
 	if recovered {
@@ -255,7 +233,6 @@ func NewFileReader(filename string) *FileReader {
 	return &FileReader{filename: filename}
 }
 
-// In GetParsedInternalKeys, propagate Recovered to ParsedInternalKey
 func (fr *FileReader) GetParsedInternalKeys() ([]common.ParsedInternalKey, error) {
 	batches, err := fr.getWriteBatches()
 	if err != nil {
@@ -297,7 +274,6 @@ func (fr *FileReader) getWriteBatches() ([]*WriteBatch, error) {
 		case TypeFull:
 			fmt.Fprintf(os.Stderr, "TRACE-LOG: Entered TypeFull case for index %d, file %s, offset %d\n", i, fr.filename, rec.ContentsOffset)
 
-			// Added: If there's a lingering buffer from a previous incomplete batch, attempt recovery
 			if buffer != nil {
 				fmt.Fprintf(os.Stderr, "Warning-LOG: Found TypeFull while previous buffer was not nil (incomplete batch?). Attempting recovery. Prev FirstOffset: %d, Current Offset: %d\n", firstRecordOffset, rec.ContentsOffset)
 				recoveryBatch, recoveryErr := decodeWriteBatch(buffer, firstRecordOffset)
@@ -326,7 +302,6 @@ func (fr *FileReader) getWriteBatches() ([]*WriteBatch, error) {
 		case TypeFirst:
 			fmt.Fprintf(os.Stderr, "TRACE-LOG: Entered TypeFirst case for index %d, file %s, offset %d, content length %d\n", i, fr.filename, rec.ContentsOffset, len(rec.Contents))
 
-			// Existing: Check and recover if lingering buffer
 			if buffer != nil {
 				fmt.Fprintf(os.Stderr, "Warning-LOG: Found TypeFirst while previous buffer was not nil (incomplete batch?). Attempting recovery. Prev FirstOffset: %d, Current Offset: %d\n", firstRecordOffset, rec.ContentsOffset)
 				recoveryBatch, recoveryErr := decodeWriteBatch(buffer, firstRecordOffset)
@@ -336,7 +311,6 @@ func (fr *FileReader) getWriteBatches() ([]*WriteBatch, error) {
 					batches = append(batches, recoveryBatch)
 					fmt.Fprintf(os.Stderr, "Recovery-LOG: Successfully recovered incomplete previous batch with %d records.\n", recoveryBatch.Count)
 				}
-				// Reset after attempt (existing, but moved up for consistency)
 				buffer = nil
 				firstRecordOffset = -1
 			}
@@ -382,7 +356,6 @@ func (fr *FileReader) getWriteBatches() ([]*WriteBatch, error) {
 			fmt.Fprintf(os.Stderr, "UNEXPECTED-TYPE-LOG: index %d, file %s, Offset: %d, Encountered unexpected RecordType: %d\n",
 				i, fr.filename, rec.ContentsOffset, rec.RecordType)
 
-			// Added: Recover any lingering buffer before skipping
 			if buffer != nil {
 				fmt.Fprintf(os.Stderr, "Warning-LOG: Unexpected type while previous buffer was not nil. Attempting recovery. Prev FirstOffset: %d, Current Offset: %d\n", firstRecordOffset, rec.ContentsOffset)
 				recoveryBatch, recoveryErr := decodeWriteBatch(buffer, firstRecordOffset)
@@ -397,7 +370,7 @@ func (fr *FileReader) getWriteBatches() ([]*WriteBatch, error) {
 			}
 		}
 		fmt.Fprintf(os.Stderr, "STATE-LOG: After index %d, file %s, offset %d, type %d: buffer len=%d, firstOffset=%d\n", i, fr.filename, rec.ContentsOffset, rec.RecordType, len(buffer), firstRecordOffset)
-	} // <-- End of the for loop
+	}
 
 	fmt.Fprintf(os.Stderr, "MINIMAL-LOG: <<< EXITED for loop over physicalRecords for %s\n", fr.filename)
 

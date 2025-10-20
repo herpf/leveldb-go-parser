@@ -32,8 +32,8 @@ type KeyValueRecord struct {
 
 func (r *KeyValueRecord) GetSequenceNumber() uint64 { return r.SequenceNumber }
 func (r *KeyValueRecord) GetKey() []byte            { return r.Key }
-func (r *KeyValueRecord) GetValue() []byte          { return r.Value }      // Added method
-func (r *KeyValueRecord) GetType() byte             { return r.RecordType } // Added method
+func (r *KeyValueRecord) GetValue() []byte          { return r.Value }
+func (r *KeyValueRecord) GetType() byte             { return r.RecordType }
 func (r *KeyValueRecord) GetOffset() int64          { return r.Offset }
 
 // ParsedInternalKey corresponds to the ParsedInternalKey class in log.py
@@ -86,7 +86,6 @@ func BytesToEscapedString(b []byte) string {
 }
 
 // LevelDBDecoder is a helper to decode data types from a stream.
-// It uses io.ReadSeeker for flexibility with files and in-memory buffers.
 type LevelDBDecoder struct {
 	reader io.ReadSeeker
 }
@@ -122,8 +121,6 @@ func (d *LevelDBDecoder) ReadBytes(n int) (int64, []byte, error) {
 	}
 	return startPos, buf[:read], nil
 }
-
-// --- Primitive Decoders ---
 
 func (d *LevelDBDecoder) DecodeUint64() (int64, uint64, error) {
 	startPos := d.Offset()
@@ -191,8 +188,6 @@ func (d *LevelDBDecoder) DecodeDouble() (int64, float64, error) {
 	err := binary.Read(d.reader, binary.LittleEndian, &val)
 	return d.Offset() - startPos, val, err
 }
-
-// --- Varint and Prefixed Decoders ---
 
 // simpleByteReader is a helper to adapt an io.Reader to an io.ByteReader
 type simpleByteReader struct{ io.Reader }
