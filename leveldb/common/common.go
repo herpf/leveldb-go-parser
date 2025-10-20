@@ -48,8 +48,8 @@ type ParsedInternalKey struct {
 
 func (r *ParsedInternalKey) GetSequenceNumber() uint64 { return r.SequenceNumber }
 func (r *ParsedInternalKey) GetKey() []byte            { return r.Key }
-func (r *ParsedInternalKey) GetValue() []byte          { return r.Value }      // Added method
-func (r *ParsedInternalKey) GetType() byte             { return r.RecordType } // Added method
+func (r *ParsedInternalKey) GetValue() []byte          { return r.Value }
+func (r *ParsedInternalKey) GetType() byte             { return r.RecordType }
 func (r *ParsedInternalKey) GetOffset() int64          { return r.Offset }
 
 // JSONRecord is used for custom JSON output with escaped strings.
