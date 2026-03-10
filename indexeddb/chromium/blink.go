@@ -52,6 +52,14 @@ type V8Deserializer struct {
 	depth    int
 }
 
+// FullyResolvedRecord holds the parsed key, parsed value, and any physical blob data.
+type FullyResolvedRecord struct {
+	Key      IndexedDBKey
+	Value    any
+	BlobPath string
+	BlobData []byte // Or a slice of these if you encounter arrays of blobs
+}
+
 func NewV8Deserializer(data []byte) *V8Deserializer {
 	return &V8Deserializer{
 		decoder: common.NewLevelDBDecoder(bytes.NewReader(data)),
@@ -753,6 +761,9 @@ func (d *V8Deserializer) ReadJSMap() (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		if len(peeked) == 0 {
+			return nil, io.EOF
+		}
 		if V8SerializationTag(peeked[0]) == V8EndJSMap {
 			d.decoder.DecodeUint8()
 			break
@@ -792,6 +803,9 @@ func (d *V8Deserializer) ReadJSSet() (any, error) {
 		peeked, err := d.decoder.PeekBytes(1)
 		if err != nil {
 			return nil, err
+		}
+		if len(peeked) == 0 {
+			return nil, io.EOF
 		}
 		if V8SerializationTag(peeked[0]) == V8EndJSSet {
 			d.decoder.DecodeUint8()

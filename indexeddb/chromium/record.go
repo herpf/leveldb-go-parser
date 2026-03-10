@@ -91,7 +91,8 @@ func DecodeKeyPrefix(decoder *common.LevelDBDecoder) (*KeyPrefix, error) {
 // ObjectStoreDataKey represents data stored in an object store.
 type ObjectStoreDataKey struct {
 	BaseKey
-	UserKey any `json:"user_key"`
+	KeyType string `json:"key_type"`
+	UserKey any    `json:"user_key"`
 }
 
 func (k *ObjectStoreDataKey) ParseValue(valueBytes []byte) (any, error) {
@@ -101,6 +102,7 @@ func (k *ObjectStoreDataKey) ParseValue(valueBytes []byte) (any, error) {
 // DatabaseNameKey maps a database name to its ID.
 type DatabaseNameKey struct {
 	BaseKey
+	KeyType      string `json:"key_type"`
 	Origin       string `json:"origin"`
 	DatabaseName string `json:"database_name"`
 }
@@ -243,7 +245,7 @@ func ParseKey(keyBytes []byte) (IndexedDBKey, error) {
 			if errOrigin != nil || errDbName != nil {
 				return nil, fmt.Errorf("failed to decode DatabaseName key details: origin_err=%v, dbname_err=%v", errOrigin, errDbName)
 			}
-			return &DatabaseNameKey{BaseKey: baseKey, Origin: origin, DatabaseName: dbName}, nil
+			return &DatabaseNameKey{BaseKey: baseKey, KeyType: "DatabaseName", Origin: origin, DatabaseName: dbName}, nil
 		}
 		// Other global metadata types handled generically for now
 		return &GenericKey{BaseKey: baseKey, KeyType: fmt.Sprintf("GlobalMetadata (Type %d)", metaType)}, nil
@@ -264,7 +266,7 @@ func ParseKey(keyBytes []byte) (IndexedDBKey, error) {
 		// Successfully parsed user key
 		switch keyType {
 		case ObjectStoreData:
-			return &ObjectStoreDataKey{BaseKey: baseKey, UserKey: userKey}, nil
+			return &ObjectStoreDataKey{BaseKey: baseKey, KeyType: "ObjectStoreData", UserKey: userKey}, nil
 		case ExistsEntry:
 			// Fallthrough for now, treat like Generic DataEntry
 			fallthrough
