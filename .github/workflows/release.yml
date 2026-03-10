@@ -6,6 +6,7 @@ on:
   push:
     tags:
       - 'v*'
+      - 'beta'
 
 jobs:
   release:
@@ -37,6 +38,7 @@ jobs:
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ github.ref == 'refs/tags/beta' }}
           files: |
             leveldb-parser-go-linux-amd64
             leveldb-parser-go-windows-amd64.exe
