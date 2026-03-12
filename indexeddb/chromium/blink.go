@@ -17,8 +17,12 @@ const maxArrayLen = 1 << 20
 const maxProps = 1 << 20
 
 type JSArray struct {
-	Values     []any          `json:"values,omitempty"`
-	Properties map[string]any `json:"properties,omitempty"`
+	Values     []any          `json:"values"`
+	Properties map[string]any `json:"properties"`
+}
+
+type JSUndefined struct {
+	Type string `json:"__type__"`
 }
 
 // ObjectStoreDataValue remains the same
@@ -50,6 +54,14 @@ type V8Deserializer struct {
 	version  uint32
 	delegate *BlinkDeserializer
 	depth    int
+}
+
+// FullyResolvedRecord holds the parsed key, parsed value, and any physical blob data.
+type FullyResolvedRecord struct {
+	Key      IndexedDBKey
+	Value    any
+	BlobPath string
+	BlobData []byte // Or a slice of these if you encounter arrays of blobs
 }
 
 func NewV8Deserializer(data []byte) *V8Deserializer {
@@ -290,7 +302,7 @@ func (d *V8Deserializer) ReadObjectInternal() (any, error) {
 	case V8Null:
 		return nil, nil
 	case V8Undefined:
-		return "undefined", nil
+		return JSUndefined{Type: "Undefined"}, nil
 	case V8True:
 		return true, nil
 	case V8False:
@@ -753,6 +765,9 @@ func (d *V8Deserializer) ReadJSMap() (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		if len(peeked) == 0 {
+			return nil, io.EOF
+		}
 		if V8SerializationTag(peeked[0]) == V8EndJSMap {
 			d.decoder.DecodeUint8()
 			break
@@ -792,6 +807,9 @@ func (d *V8Deserializer) ReadJSSet() (any, error) {
 		peeked, err := d.decoder.PeekBytes(1)
 		if err != nil {
 			return nil, err
+		}
+		if len(peeked) == 0 {
+			return nil, io.EOF
 		}
 		if V8SerializationTag(peeked[0]) == V8EndJSSet {
 			d.decoder.DecodeUint8()
