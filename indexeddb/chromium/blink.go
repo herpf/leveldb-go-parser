@@ -17,8 +17,12 @@ const maxArrayLen = 1 << 20
 const maxProps = 1 << 20
 
 type JSArray struct {
-	Values     []any          `json:"values,omitempty"`
-	Properties map[string]any `json:"properties,omitempty"`
+	Values     []any          `json:"values"`
+	Properties map[string]any `json:"properties"`
+}
+
+type JSUndefined struct {
+	Type string `json:"__type__"`
 }
 
 // ObjectStoreDataValue remains the same
@@ -298,7 +302,7 @@ func (d *V8Deserializer) ReadObjectInternal() (any, error) {
 	case V8Null:
 		return nil, nil
 	case V8Undefined:
-		return "undefined", nil
+		return JSUndefined{Type: "Undefined"}, nil
 	case V8True:
 		return true, nil
 	case V8False:

@@ -179,7 +179,8 @@ func removeNulls(v any) any {
 	}
 	switch val := v.(type) {
 	case []any:
-		var cleaned []any
+		// Initialize as an empty slice (not nil) so it marshals to [] instead of null
+		cleaned := make([]any, 0)
 		for _, item := range val {
 			if item != nil {
 				cleanedItem := removeNulls(item)
@@ -188,45 +189,38 @@ func removeNulls(v any) any {
 				}
 			}
 		}
-		if len(cleaned) == 0 {
-			return nil
-		}
-		return cleaned
+		return cleaned // Return even if length is 0
+
 	case map[string]any:
 		cleanedMap := make(map[string]any)
 		for k, item := range val {
-			cleanedItem := removeNulls(item)
-			if cleanedItem != nil {
-				cleanedMap[k] = cleanedItem
+			if item != nil {
+				cleanedItem := removeNulls(item)
+				if cleanedItem != nil {
+					cleanedMap[k] = cleanedItem
+				}
 			}
 		}
-		if len(cleanedMap) == 0 {
-			return nil
-		}
-		return cleanedMap
+		return cleanedMap // Return even if length is 0
+
 	case string:
-		var jsonData any
-		if err := json.Unmarshal([]byte(val), &jsonData); err == nil {
-			return removeNulls(jsonData)
-		}
+		// REMOVED the json.Unmarshal hack!
+		// This was converting valid V8 strings into Go numbers/booleans.
 		return val
+
 	case *chromium.JSArray:
-		values := removeNulls(val.Values)
-		if values != nil {
-			val.Values = values.([]any)
-		} else {
-			val.Values = nil
+		if val.Values != nil {
+			if cleanedVals, ok := removeNulls(val.Values).([]any); ok {
+				val.Values = cleanedVals
+			}
 		}
-		props := removeNulls(val.Properties)
-		if props != nil {
-			val.Properties = props.(map[string]any)
-		} else {
-			val.Properties = nil
-		}
-		if val.Values == nil && val.Properties == nil {
-			return nil
+		if val.Properties != nil {
+			if cleanedProps, ok := removeNulls(val.Properties).(map[string]any); ok {
+				val.Properties = cleanedProps
+			}
 		}
 		return val
+
 	default:
 		return val
 	}

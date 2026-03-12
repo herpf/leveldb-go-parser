@@ -209,17 +209,18 @@ func (d *LevelDBDecoder) DecodeVarint() (int64, uint64, error) {
 // This is used by IndexedDB keys, which (unlike V8 values) use big endian.
 func (d *LevelDBDecoder) DecodeUTF16StringWithLengthBigEndian() (int64, string, error) {
 	startPos := d.Offset()
-	_, length, err := d.DecodeVarint()
+	_, charLength, err := d.DecodeVarint()
 	if err != nil {
 		return startPos, "", fmt.Errorf("failed to read string length: %w", err)
 	}
 
-	_, utf16Bytes, err := d.ReadBytes(int(length))
+	byteLength := int(charLength * 2)
+
+	_, utf16Bytes, err := d.ReadBytes(byteLength)
 	if err != nil {
 		return startPos, "", fmt.Errorf("failed to read string content: %w", err)
 	}
 
-	// Use BigEndian decoder
 	decoder := xunicode.UTF16(xunicode.BigEndian, xunicode.IgnoreBOM).NewDecoder()
 	utf8Bytes, _, err := transform.Bytes(decoder, utf16Bytes)
 	if err != nil {
@@ -230,14 +231,18 @@ func (d *LevelDBDecoder) DecodeUTF16StringWithLengthBigEndian() (int64, string, 
 	return d.Offset() - startPos, string(utf8Bytes), nil
 }
 
+// DecodeUTF16StringWithLength decodes a UTF-16 LE string.
 func (d *LevelDBDecoder) DecodeUTF16StringWithLength() (int64, string, error) {
 	startPos := d.Offset()
-	_, length, err := d.DecodeVarint()
+	_, charLength, err := d.DecodeVarint()
 	if err != nil {
 		return startPos, "", fmt.Errorf("failed to read string length: %w", err)
 	}
 
-	_, utf16Bytes, err := d.ReadBytes(int(length))
+	//  UTF-16 characters are 2 bytes each
+	byteLength := int(charLength * 2)
+
+	_, utf16Bytes, err := d.ReadBytes(byteLength)
 	if err != nil {
 		return startPos, "", fmt.Errorf("failed to read string content: %w", err)
 	}
